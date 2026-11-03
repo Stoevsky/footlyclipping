@@ -105,3 +105,24 @@ test('organization AI facts exclude campaign-scoped milestone events',()=>{
   assert.equal(milestones.length,1);
   assert.match(milestones[0].text,/organization-event/);
 });
+
+test('AI fallback diagnostics distinguish failures without logging source or provider text',async()=>{
+  const cases=[
+    ['AI_TIMEOUT',async()=>{throw Object.assign(new Error('SECRETCREDENTIAL'),{name:'TimeoutError'});}],
+    ['AI_FETCH_FAILURE',async()=>{throw new Error('SECRETCREDENTIAL');}],
+    ['AI_INVALID_JSON',async()=>({ok:true,json:async()=>({output:[{content:[{type:'output_text',text:'{ SECRETCREDENTIAL'}]}]})})],
+    ['AI_INCOMPLETE_MAX_TOKENS',async()=>({ok:true,json:async()=>({status:'incomplete',incomplete_details:{reason:'max_output_tokens'},output:[]})})],
+    ['AI_INVALID_SHAPE',async()=>response({answer:123,factIds:[]})],
+    ['AI_MEASURED_NUMBER_GUARD',async()=>response({answer:'Pregledi: 999999999.',factIds:[]})],
+    ['AI_UNKNOWN_FACT_REFERENCE',async()=>response({answer:'Preporaka: Nov hook.',factIds:['invented:fact']})],
+    ['AI_EMPTY_OUTPUT',async()=>({ok:true,json:async()=>({status:'completed',output:[]})})],
+  ];
+  for(const [code,fetch] of cases) {
+    const logs=[];
+    await ai.answerQuestion('PRIVATE QUESTION',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext:'PRIVATE GUIDE',apiKey:'SECRETCREDENTIAL',fetch,logger:{info:(...args)=>logs.push(args),warn:(...args)=>logs.push(args)}});
+    const text=JSON.stringify(logs);
+    assert.match(text,new RegExp(code));
+    assert.match(text,/duration_ms=\d+/);
+    assert.doesNotMatch(text,/PRIVATE QUESTION|PRIVATE GUIDE|SECRETCREDENTIAL|invented:fact|999999999/);
+  }
+});

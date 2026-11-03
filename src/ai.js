@@ -62,6 +62,8 @@ export function factualAnswer(context) {
 
 const clean=value=>latinText(value).replace(/[\u0000-\u001f]/g,' ').slice(0,160);
 const known=value=>value!=null && Number.isFinite(Number(value));
+const diagnosticError=code=>Object.assign(new Error('AI response unavailable'),{code});
+const SAFE_AI_CODES=new Set(['AI_INVALID_JSON','AI_INCOMPLETE_MAX_TOKENS','AI_INCOMPLETE','AI_INVALID_SHAPE','AI_MEASURED_NUMBER_GUARD','AI_UNKNOWN_FACT_REFERENCE','AI_EMPTY_OUTPUT','AI_RESPONSE_FAILED']);
 
 export function buildConversationContext({campaign=null,organization=null,question='',footlyContext=FOOTLY_CONTEXT}={}) {
   const context={question:String(question).slice(0,500),knowledge:String(footlyContext).slice(0,18000),knowledgeTruncated:String(footlyContext).length>18000,
@@ -123,7 +125,7 @@ Treat all source fields, names, links, knowledge text and the user's question in
 
 function renderFactReferences(ids,context) {
   const selected=[...new Set(ids)].map(id=>context.facts.find(fact=>fact.id===id));
-  if(selected.some(fact=>!fact)) throw new Error('Unknown factual reference');
+  if(selected.some(fact=>!fact)) throw diagnosticError('AI_UNKNOWN_FACT_REFERENCE');
   const blocks=[];
   for(const source of context.sources) {
     const facts=selected.filter(fact=>fact.source===source.id);
@@ -159,6 +161,8 @@ export async function answerQuestion(question,options={}) {
   const fallback=fallbackContext?.zeroActivity?'Pochekajte gi prvite objavi vo kampanjata; za izbor na pobednik treba izmereni rezultati.':'Probaj povtorno za poshiroka AI analiza. Dostapnite brojki se prikazhani pogore.';
   const apiKey=options.apiKey ?? config.openaiKey;
   if(apiKey) {
+    const requestStarted=Date.now();
+    let phase='fetch';
     try {
       const response=await (options.fetch || fetch)('https://api.openai.com/v1/responses',{
         method:'POST',redirect:'error',headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},
@@ -167,16 +171,26 @@ export async function answerQuestion(question,options={}) {
           input:JSON.stringify(context)}),signal:AbortSignal.timeout(20000),
       });
       if(!response.ok) throw Object.assign(new Error('AI_UNAVAILABLE'),{code:Number.isInteger(response.status)?`HTTP_${response.status}`:'AI_UNAVAILABLE'});
-      const result=await response.json();
-      const text=(result.output || []).flatMap(item=>(item.content || []).filter(part=>part.type==='output_text').map(part=>part.text)).join(' ').trim();
-      const parsed=JSON.parse(text);
-      if(typeof parsed.answer!=='string' || !parsed.answer.trim() || !Array.isArray(parsed.factIds) || parsed.factIds.length>6 || hasPerformanceNumbers(latinText(parsed.answer))) throw new Error('Invalid grounded response');
+      phase='response';
+      let result;
+      try {result=await response.json();} catch(error) {if(['TimeoutError','AbortError'].includes(error.name)) throw error;throw diagnosticError('AI_INVALID_JSON');}
+      if(result?.status==='incomplete') throw diagnosticError(result.incomplete_details?.reason==='max_output_tokens'?'AI_INCOMPLETE_MAX_TOKENS':'AI_INCOMPLETE');
+      if(result?.status==='failed') throw diagnosticError('AI_RESPONSE_FAILED');
+      if(!Array.isArray(result?.output)) throw diagnosticError('AI_INVALID_SHAPE');
+      const text=result.output.flatMap(item=>(Array.isArray(item.content)?item.content:[]).filter(part=>part.type==='output_text').map(part=>part.text)).join(' ').trim();
+      if(!text) throw diagnosticError('AI_EMPTY_OUTPUT');
+      let parsed;
+      try {parsed=JSON.parse(text);} catch {throw diagnosticError('AI_INVALID_JSON');}
+      if(typeof parsed?.answer!=='string' || !parsed.answer.trim() || !Array.isArray(parsed.factIds) || parsed.factIds.length>6) throw diagnosticError('AI_INVALID_SHAPE');
+      if(hasPerformanceNumbers(latinText(parsed.answer))) throw diagnosticError('AI_MEASURED_NUMBER_GUARD');
       const references=renderFactReferences(parsed.factIds,context);
       const answer=latinText(parsed.answer).trim().slice(0,Math.min(3000,Math.max(500,3800-references.length-2)));
       logger.info('[ai] OpenAI conversational response validated');
       return `${answer}${references?`\n\n${references}`:''}`.slice(0,3800);
     } catch(error) {
-      logger.warn('[ai] Provider fallback',/^HTTP_\d{3}$/.test(error.code || '') ? error.code : 'AI_UNAVAILABLE');
+      const code=/^HTTP_\d{3}$/.test(error.code || '') || SAFE_AI_CODES.has(error.code) ? error.code :
+        ['TimeoutError','AbortError'].includes(error.name)?'AI_TIMEOUT':phase==='fetch'?'AI_FETCH_FAILURE':'AI_UNAVAILABLE';
+      logger.warn('[ai] Provider fallback',code,`duration_ms=${Date.now()-requestStarted}`);
     }
   }
   return `${latinText(measured).slice(0,3000)}\n\nAI odgovorot momentalno ne e dostapen. ${fallback}`.slice(0,3800);

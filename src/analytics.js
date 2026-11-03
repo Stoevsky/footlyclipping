@@ -99,12 +99,12 @@ export function calculateAnalytics({ accounts:sourceAccounts = [], videos:source
   const unknownSourceTimestamps = sourceRows.length-sourceTimes.length;
   const staleSourceEntities = sourceTimes.filter(at=>now-at>86400000).length;
   const notes = [];
-  if (!syncedAt) notes.push('Se ushte nema zavrshena sinhronizacija so Viral.app.');
+  if (!syncedAt) notes.push('Analitikata se ushte ne e sinhronizirana.');
   if (!inventoryComplete) notes.push('Popisot na profili ili videa e necelosen.');
   if (range.key !== 'all') {
     if (!allGainsKnown) notes.push('Nema celosna istorija za pregledi vo ovoj period; nepoznatite vrednosti ne se nula.');
     if (periodCoverage.accountCoverage === 'top100' || periodCoverage.videoCoverage === 'top100') notes.push('Periodnite API podatoci imaat top-100 opfat; rangiranjeto mozhe da bide delumno.');
-    if (metricsTimezone === 'UTC' && timezone !== 'UTC') notes.push(`Pregledite od Viral.app se po UTC denovi; rasporedot e ${timezone}.`);
+    if (metricsTimezone === 'UTC' && timezone !== 'UTC') notes.push(`Pregledite se po UTC denovi; rasporedot e ${timezone}.`);
     if (observed) notes.push('Del od rastot e izmeren megju dostapnite snapshot zapisi vo periodot, ne za celiot period.');
   }
   if (sourceVideos.some(video => video.shareCount == null)) notes.push('Shares se prikazhuvaat samo koga se dostapni. Engagement = (likes + komentari) / pregledi.');

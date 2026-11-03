@@ -22,12 +22,20 @@ export function creatorAliases(account) {
     .filter(value=>typeof value==='string' && value.trim()).map(value=>latinText(value).trim().replace(/^@/,'').toLowerCase()))];
 }
 const field = (name,value,inline=false) => ({name:short(name,250),value:short(value || 'Nema podatoci',1024),inline});
-const base = (title,color=GREEN) => new EmbedBuilder().setTitle(short(title,256)).setColor(color).setFooter({text:'Footly • Viral.app'}).setTimestamp();
+const base = (title,color=GREEN) => new EmbedBuilder().setTitle(short(title,256)).setColor(color).setFooter({text:'Footly'}).setTimestamp();
 export const periodText = snapshot => `${snapshot.period.from} - ${snapshot.period.to} (${snapshot.period.timezone})`;
 export const isCampaignUnstarted = snapshot => snapshot?.scope?.type==='campaign' && snapshot.accounts.length>0 && snapshot.videos.length===0 && snapshot.accounts.every(account=>account.viewCount===0 && account.videoCount===0);
+const participantLabel = account => {
+  const handles=[...new Set([account.username,...(account.connectedAccounts || []).map(item=>item.username)].filter(Boolean))];
+  const labels=handles.map(username=>accountLabel({username})).join(' · ');
+  const name=short(account.displayName || account.name,80).replace(/([\\`*_~|>])/g,'\\$1');
+  return `${name && !handles.some(handle=>handle.toLowerCase()===name.toLowerCase())?`**${name}** · `:''}${labels || accountLabel(account)}`;
+};
+const waitingDescription = accounts => `Kampanjata gi ochekuva prvite objavi. Site kreatori se izramneti; se ushte nema lider.\n\n${accounts.map(account=>`• ${participantLabel(account)}`).join('\n')}`;
 
 export function withCoverage(embed,snapshot) {
-  const notes=snapshot.coverage?.notes || [];
+  const notes=(snapshot.coverage?.notes || []).filter(note=>!isCampaignUnstarted(snapshot) || /postar[ao]/i.test(note))
+    .map(note=>latinText(note).replace(/Viral\.app/gi,'izvorot na podatoci'));
   if(snapshot.scope?.type==='campaign') embed.addFields(field('Kampanja',snapshot.scope.name));
   if(notes.length) embed.addFields(field('Opfat i ogranichuvanja',notes.join('\n')));
   if(snapshot.syncedAt) embed.setTimestamp(new Date(snapshot.syncedAt));
@@ -49,14 +57,16 @@ export function rankRows(rows,fieldName,limit=10) {
 }
 
 export function rankingEmbed(accounts,count,metricName,{snapshot,isPartial=false}={}) {
+  if(isCampaignUnstarted(snapshot)) return withCoverage(base('🏆 FOOTLY LEADERBOARD — Uchesnici vo kampanjata')
+    .setDescription(waitingDescription(accounts)),snapshot);
   const metric=METRICS[metricName] || METRICS.nedela;
   const fieldName=snapshot?.period.key==='all' ? (metricName==='engagement'?'engagementRate':['nedela','mesec'].includes(metricName)?'viewCount':metric.field) : metric.field;
   const ranked=rankRows(accounts,fieldName);
   const tiedAtZero=ranked.length>0 && ranked.every(account=>Number(account[fieldName])===0);
-  const lines=ranked.map((account,index)=>`${tiedAtZero?'•':`${index+1}.`} **${accountLabel(account)}**${account.platform?` · ${short(account.platform,30)}`:''}\n${metricName==='engagement'?percentText(account[fieldName]):numberText(account[fieldName])} ${metricName==='engagement'?'':metric.unit}`);
+  const lines=ranked.map((account,index)=>`${tiedAtZero?'•':`${index+1}.`} **${accountLabel(account)}**${account.platform?` · ${short(account.platform,30)}`:''}${tiedAtZero?'':`\n${metricName==='engagement'?percentText(account[fieldName]):numberText(account[fieldName])} ${metricName==='engagement'?'':metric.unit}`}`);
   const title=['nedela','mesec'].includes(metricName) && snapshot ? (snapshot.period.key==='all'?'Vkupno sledeni pregledi':'Pregledi vo izbraniot period') : metric.title;
   const description=lines.join('\n\n') || 'Nema podatoci za ovoj period.';
-  const embed=base(`🏆 FOOTLY LEADERBOARD — ${title}`).setDescription(tiedAtZero?`Site prikazhani kreatori se izramneti na 0; se ushte nema lider.\n\n${description}`:description);
+  const embed=base(`🏆 FOOTLY LEADERBOARD — ${title}`).setDescription(tiedAtZero?`Site prikazhani kreatori se izramneti; se ushte nema lider.\n\n${description}`:description);
   embed.addFields(field('Opfat',`${accounts.length} od ${count} sledeni profili; rangirani se samo poznati vrednosti.`));
   if(snapshot) {embed.addFields(field('Period',periodText(snapshot)));withCoverage(embed,snapshot);}
   else if(isPartial) embed.addFields(field('Ogranichuvanje','Ovoj leaderboard sodrzhi delumni podatoci.'));
@@ -95,6 +105,8 @@ export function statisticsEmbed(snapshot) {
 export function reportEmbeds(snapshot,type='daily') {
   const weekly=type==='weekly';
   const unstarted=isCampaignUnstarted(snapshot);
+  if(unstarted) return [withCoverage(base('📊 FOOTLY — Uchesnici vo kampanjata',BLUE)
+    .setDescription(waitingDescription(snapshot.accounts)),snapshot)];
   const embed=statisticsEmbed(snapshot).setTitle(type==='campaign'?'📊 FOOTLY — Tekovna sostojba na kampanjata':weekly?'📊 FOOTLY — Nedelen izvestaj':'📊 FOOTLY — Dneven izvestaj');
   const creatorMetric=snapshot.period.key==='all'?'viewCount':'viewCountInPeriod';
   const topCreators=rankRows(snapshot.accounts,creatorMetric,weekly || unstarted ?10:3);

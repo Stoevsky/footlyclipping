@@ -176,11 +176,10 @@ test('campaign leaderboard and report keep all four zero participants and make n
   assert.match(reportText,/prvite objavi/);
 });
 
-test('zero campaign AI facts show scope and avoid fabricated winner or format advice',async()=>{
+test('zero campaign AI fallback omits zero-stat blocks and avoids fabricated winner or format advice',async()=>{
   let calls=0;
   const answer=await ai.answerQuestion('Koj kreator treba da go nagradime?',{getAnalytics:async()=>zeroCampaign,apiKey:'test',fetch:async()=>{calls++;throw new Error('not needed');}});
-  assert.match(answer,/Latest Footly campaign/);
-  assert.match(answer,/izramneti/i);
+  assert.doesNotMatch(answer,/izramneti|0 pregledi|0 objavi/i);
   assert.match(answer,/prvite objavi/);
   assert.doesNotMatch(answer,/Pregledajte gi najdobrite objavi/);
   assert.equal(calls,1);

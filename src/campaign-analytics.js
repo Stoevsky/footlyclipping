@@ -68,7 +68,7 @@ export function calculateCampaignAnalytics(source,{campaignId,period='week',now=
   if(selected && !complete) notes.push('Del od kampanjskite metrics ne se dostapni; nepoznatite vrednosti ne se nula.');
   if(snapshot && totals.videos===0 && totals.views===0) notes.push('Kampanjata se ushte nema podobni videa. Potvrdenite metrics se 0.');
   if(totals.videos!==null && totals.videos>allVideos.size) notes.push('Listata na videa e ogranicena na top 300; vkupnite kampanjski brojki se od celosniot performance izvestaj.');
-  if(range.key!=='all' && metricTimezone && metricTimezone!==timezone) notes.push(`Pregledite od Viral.app se po ${metricTimezone} denovi; rasporedot e ${timezone}.`);
+  if(range.key!=='all' && metricTimezone && metricTimezone!==timezone) notes.push(`Pregledite se po ${metricTimezone} denovi; rasporedot e ${timezone}.`);
   if(snapshot?.syncedAt && new Date(now)-new Date(snapshot.syncedAt)>7200000) notes.push('Poslednata sinhronizacija e postara od 2 chasa.');
   if(sourceUpdatedAt && new Date(now)-new Date(sourceUpdatedAt)>86400000) notes.push('Izvornata proverka na kampanjskite podatoci e postara od 24 chasa; novoto prezemanje ne ja osvezhuva.');
   if(snapshot && !sourceUpdatedAt) notes.push('Vremeto na poslednata izvorna proverka na kampanjata ne e poznato.');

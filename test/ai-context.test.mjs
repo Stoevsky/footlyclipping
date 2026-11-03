@@ -29,10 +29,10 @@ test('OpenAI gets Footly knowledge plus separately labeled campaign and organiza
 test('selected factual references render their source instead of mixing organization and campaign totals',async()=>{
   const answer=await ai.answerQuestion('Sporedi ja kampanjata so organizacijata.',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext:'Footly',apiKey:'test',logger,
     fetch:async()=>response({answer:'Fakti: Kampanjata i organizacijata se razlichni opfati. Preporaka: sledi ja kampanjata oddelno.',factIds:['campaign:views','organization:views']})});
-  assert.match(answer,/Kampanja.*Footly current/);
   assert.match(answer,/Organizacija/);
   assert.match(answer,/1,234,567/);
-  assert.match(answer,/Vkupno pregledi: 0/);
+  assert.doesNotMatch(answer,/Vkupno pregledi: 0|Viral[. ]?app/i);
+  assert.match(answer,/Korisni podatoci/);
   assert.match(answer,/2026-11-03T10:00:00Z/);
 });
 
@@ -52,7 +52,58 @@ test('invalid fact IDs or obvious unsupported performance claims fall back to me
   for(const payload of [{answer:'Ima 999999999 pregledi.',factIds:[]},{answer:'Odlichno.',factIds:['organization:invented']}]) {
     const answer=await ai.answerQuestion('Kako odi kampanjata?',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext:'Footly',apiKey:'test',logger,fetch:async()=>response(payload)});
     assert.doesNotMatch(answer,/999999999|invented/);
-    assert.match(answer,/izramneti/);
+    assert.match(answer,/AI odgovorot momentalno ne e dostapen/);
+    assert.doesNotMatch(answer,/izramneti|0 pregledi|current0/);
+  }
+});
+
+test('creative answers retain five slides, caption and CTA while irrelevant zero references are omitted',async()=>{
+  const answer='Preporaka za 5 slajdovi:\n'+Array.from({length:5},(_,i)=>`${i+1}. Slajd: ${'Prikazhi fudbalska vezhba so jasen tekst. '.repeat(15)}`).join('\n')+'\nCaption: Tvojot sleden trening pochnuva sega.\nCTA: Probaj Footly.';
+  const result=await ai.answerQuestion('Daj mi originalen slideshow so 5 slajdovi, caption i CTA.',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>response({answer,factIds:['campaign:views','campaign:creator:0','organization:views']})});
+  assert.equal(result,answer);
+  assert.match(result,/5\. Slajd:.*\nCaption:.*\nCTA:/s);
+});
+
+test('visible provider branding is removed from prose, references and fallback',async()=>{
+  const result=await ai.answerQuestion('Daj mi ideja.',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>response({answer:'Preporaka: Podatocite od Viral.app pomagaat. Probaj nov hook.',factIds:[]})});
+  assert.doesNotMatch(result,/viral[. ]?app/i);
+  assert.match(result,/analitikata/);
+  const fallback=await ai.answerQuestion('Daj slideshow.',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>{throw new Error('outage');}});
+  assert.doesNotMatch(fallback,/0 pregledi|0 objavi|current0|Viral[. ]?app/i);
+  assert.ok(fallback.length<300);
+});
+
+test('a single corrective retry repairs measured claims or unknown references using identical context',async()=>{
+  for(const invalid of [{answer:'Pregledi: 999999999.',factIds:[]},{answer:'Nov hook.',factIds:['invented']}]) {
+    const requests=[];
+    const result=await ai.answerQuestion('Daj ideja za 5 slajdovi.',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async(_url,options)=>{
+      requests.push(JSON.parse(options.body));return response(requests.length===1?invalid:{answer:'Preporaka: Napravi 5 slajdovi so fudbalska vezhba i CTA za Footly.',factIds:[]});
+    }});
+    assert.equal(requests.length,2);
+    assert.equal(requests[0].input,requests[1].input);
+    assert.notEqual(requests[0].instructions,requests[1].instructions);
+    assert.equal(requests[1].max_output_tokens,1800);
+    assert.match(result,/Napravi 5 slajdovi/);
+  }
+});
+
+test('repair is bounded and unavailable or malformed responses are not retried',async()=>{
+  for(const [mock,expected] of [[()=>response({answer:'Pregledi: 999999999.',factIds:[]}),2],[()=>response({answer:'Hook.',factIds:['invented']}),2],[()=>({ok:false,status:503}),1],[()=>response({answer:123,factIds:[]}),1]]) {
+    let calls=0;
+    const result=await ai.answerQuestion('Daj slideshow.',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>{calls++;return mock();}});
+    assert.equal(calls,expected);
+    assert.doesNotMatch(result,/999999999|invented|0 pregledi/);
+    assert.match(result,/AI odgovorot momentalno ne e dostapen/);
+  }
+});
+
+test('outage fallback uses labeled organization facts for explicit organization questions and organization-only handles',async()=>{
+  for(const question of ['Kolku pregledi ima organizacijata?','Kolku pregledi ima @history?']) {
+    const result=await ai.answerQuestion(question,{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>{throw new Error('offline');}});
+    assert.match(result,/Organizacija/);
+    assert.match(result,/@history/);
+    assert.match(result,/50,000/);
+    assert.doesNotMatch(result,/Nema kreator|Se chekaat prvite|0 pregledi|Viral[. ]?app/i);
   }
 });
 
@@ -124,5 +175,25 @@ test('AI fallback diagnostics distinguish failures without logging source or pro
     assert.match(text,new RegExp(code));
     assert.match(text,/duration_ms=\d+/);
     assert.doesNotMatch(text,/PRIVATE QUESTION|PRIVATE GUIDE|SECRETCREDENTIAL|invented:fact|999999999/);
+  }
+});
+
+test('numbered slideshow lists do not turn headings or next-line numbers into measured claims',async()=>{
+  const answers=[
+    'Preporaka za 5 slajdovi:\n1. Hook: Koja e tvojata cel?\n2. Engagement: Postavi fudbalsko prashanje.\n3. Ideja: Pokazhi vezhba.\n4. Vrednost: Dodadi sovet.\n5. CTA: Probaj Footly.',
+    '1. Hook: Daj im povod za komentari\n2. Prashanje: Koja noga ti e posilna?',
+    '**1. Engagement:** Postavi fudbalsko prashanje.\n**2. CTA:** Probaj Footly.',
+  ];
+  for(const answer of answers) {
+    const result=await ai.answerQuestion('Slideshow so 5 slajdovi',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext:'Footly',apiKey:'test',logger,fetch:async()=>response({answer,factIds:[]})});
+    assert.equal(result,answer);
+  }
+});
+
+test('numbered list markers do not hide real measured claims',async()=>{
+  for(const answer of ['1. Pregledi:999999999','1. 999999999 pregledi','2) Engagement = 99%']) {
+    const result=await ai.answerQuestion('Pregledi?',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext:'Footly',apiKey:'test',logger,fetch:async()=>response({answer,factIds:[]})});
+    assert.doesNotMatch(result,/999999999|99%/);
+    assert.match(result,/AI odgovorot momentalno ne e dostapen/);
   }
 });

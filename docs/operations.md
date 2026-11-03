@@ -70,3 +70,7 @@ The user selected the recent four-creator campaign, **Clipping Kampanja 5 Serioz
 The existing leaderboard message was edited in place: exactly four campaign creators, each at zero views, explicitly tied. One campaign summary appeared in the analytics channel with zero campaign views/posts and all four participants. Prior organization data remains stored separately. Pre-participation daily/weekly reports are suppressed; future reports use campaign data. Campaign video lists are limited by the provider's top-300 endpoint, with eligibility failures excluded from alerts.
 
 The user's subsequent AI request authorizes broader organization context for `/prasaj` and `/prashaj` only. It does not change campaign-only leaderboard, report or alert scope. Private creator-guide notes are kept in runtime configuration, not committed to Git.
+
+## Manual code releases
+
+When Railway's GitHub auto deploy is unavailable, staging a non-secret `RELEASE_REVISION` variable with the intended commit SHA and deploying the staged change pulls the latest connected `main` source. Always verify the resulting GitHub source SHA in deployment Details; the marker is only an operator label, not source verification. Keep credential variables collapsed while inspecting deployments.

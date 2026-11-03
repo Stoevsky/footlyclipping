@@ -67,6 +67,7 @@ test('official period counts match all entity ids and expose UTC aggregation lim
   assert.equal(data.accounts[0].viewCountInPeriod,200);
   assert.equal(data.videos[0].viewCountInPeriod,200);
   assert.ok(data.coverage.notes.some(note => note.includes('UTC')));
+  assert.doesNotMatch(data.coverage.notes.join(' '),/Viral\.app/i);
   assert.equal(data.coverage.periodComplete,false);
 });
 
@@ -99,6 +100,7 @@ test('before first sync all summary metrics remain unknown', async () => {
   assert.equal(data.totals.views,null);
   assert.equal(data.totals.viewsGained,null);
   assert.equal(data.totals.posts,null);
+  assert.doesNotMatch(data.coverage.notes.join(' '),/Viral\.app/i);
 });
 
 test('official period engagement uses counts with the same weighted formula', async () => {

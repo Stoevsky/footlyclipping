@@ -12,7 +12,7 @@ Production leaderboards, reports and alerts use the selected **Clipping Kampanja
 - `src/analytics.js`: repeatable-read analytics, calendar periods, weighted engagement and explicit coverage.
 - `src/webhooks.js`: signed HTTP ingestion, validation, replay protection, queue leases and retries.
 - `src/delivery.js`: per-message database locks, Discord receipt storage and interrupted-send reconciliation.
-- `src/bot.js`, `src/presentation.js`, `src/ai.js`: commands, bounded reports, deterministic facts and optional OpenAI recommendations.
+- `src/bot.js`, `src/presentation.js`, `src/ai.js`: commands, bounded reports, deterministic facts and conversational OpenAI answers.
 
 HTTP starts before provider initialization. Missing configuration keeps `/health` alive and `/ready` unready, with variable names in logs. Database migrations retry with capped exponential backoff. Discord login/channel validation retries. Initial transient synchronization failures retry without bypassing provider cooldown; rejected credentials wait for a later scheduled run or configuration redeploy. Jobs do not overlap in one process. Use one production replica.
 
@@ -88,7 +88,7 @@ Launch verification covered configured schedules, automated scheduling tests, re
 
 ## Viral.app and data meaning
 
-With `VIRAL_CAMPAIGN_ID`, the bot reads the campaign and creator roster plus the official `/creator-hub/overview` performance, KPI and video endpoints. Campaign assignment and eligibility rules are applied by Viral.app. Performance pagination includes every participant; explicit zero values appear in leaderboards. Failed or missing metrics remain unknown. Campaign snapshots preserve the original organization data separately, and pending organization deliveries are excluded from campaign recovery. The existing leaderboard message is edited in place; one current campaign summary is posted after its first successful synchronization.
+With `VIRAL_CAMPAIGN_ID`, the bot reads the campaign and creator roster plus the official `/creator-hub/overview` performance, KPI and video endpoints. Campaign assignment and eligibility rules are applied by Viral.app. Performance pagination includes every participant. Before the first activity, the leaderboard shows the complete roster and an awaiting-first-posts message rather than repeated zeros. Failed or missing metrics remain unknown. Campaign snapshots preserve the original organization data separately, and pending organization deliveries are excluded from campaign recovery. The existing leaderboard message is edited in place; one current campaign summary is posted after its first successful synchronization.
 
 The campaign video endpoint returns up to 300 videos. Rankings and alert eligibility are limited to the returned campaign video set and labeled accordingly; creator totals come from the paginated performance dataset. A video absent from that eligible set cannot trigger a campaign alert. Period boundaries follow the provider's reported timezone, with differences from Skopje disclosed. A newly configured campaign never falls back to old organization totals while synchronization is pending.
 
@@ -124,7 +124,7 @@ Data limitations are shown in Discord:
 
 ## AI grounding and creator knowledge
 
-OpenAI Responses answers actual questions, including creative slideshow requests even when campaign metrics are zero. It receives the question, separately labeled campaign/organization facts, source timestamps and coverage, public Footly product context, and optional private creator guidance from `FOOTLY_KNOWLEDGE_TEXT`. A separate organization synchronization supplies broader AI context with milestone generation disabled; it cannot change campaign leaderboard/report scope.
+OpenAI Responses answers actual questions, including creative slideshow requests even when campaign metrics are zero. It receives the question, separately labeled campaign/organization facts, source timestamps and coverage, public Footly product context, and optional private creator guidance from `FOOTLY_KNOWLEDGE_TEXT`. A separate organization synchronization supplies broader AI context with milestone generation disabled; it cannot change campaign leaderboard/report scope. User-facing messages omit provider branding. Creative answers focus on useful ideas and omit empty statistics blocks.
 
 The model returns conversational guidance plus references to supplied analytics facts. The application validates fact references and renders those facts itself. Prompts distinguish recorded performance from suggestions and general model knowledge, prohibit invented statistics, and keep campaign totals separate from organization history. Responses remain Macedonian Latin. The bot does not browse live trends or inspect the contents of linked videos; missing information must be disclosed.
 

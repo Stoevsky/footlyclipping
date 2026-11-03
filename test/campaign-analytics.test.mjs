@@ -28,6 +28,7 @@ test('campaign analytics includes all four zero creators without organization hi
   assert.equal(data.totals.posts,0);
   assert.equal(data.accounts[0].followerCount,null);
   assert.equal(data.accounts[0].engagementRate,null);
+  assert.doesNotMatch(data.coverage.notes.join(' '),/Viral\.app/i);
 });
 
 test('missing creator metrics remain unknown even when other roster rows are zero',()=>{

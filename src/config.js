@@ -6,6 +6,7 @@ export function loadConfig(env = process.env) {
   return {
     token: text('DISCORD_BOT_TOKEN'), clientId: text('DISCORD_CLIENT_ID'), guildId: text('DISCORD_GUILD_ID'),
     apiKey: text('VIRAL_API_KEY'), webhookSecret: text('VIRAL_WEBHOOK_SECRET'), organizationId: text('VIRAL_ORG_ID') || null,
+    campaignId: text('VIRAL_CAMPAIGN_ID') || null,
     databaseUrl: text('DATABASE_URL'), databaseSSL: text('DATABASE_SSL') === 'true', port: number('PORT',3000),
     channels: {viral:text('CHANNEL_VIRAL_ALERTS'), leaderboard:text('CHANNEL_LEADERBOARD'), daily:text('CHANNEL_DAILY_ANALYTICS'), weekly:text('CHANNEL_WEEKLY_ANALYTICS') || text('CHANNEL_DAILY_ANALYTICS'), growth:text('CHANNEL_CREATOR_GROWTH'), ai:text('CHANNEL_FOOTLY_AI'), videos:text('CHANNEL_NEW_VIDEOS')},
     minViews:number('MIN_VIRAL_VIEWS',10000), minFollowers:number('MIN_FOLLOWERS',10000),
@@ -24,6 +25,7 @@ export function configIssues(c = config) {
   for(const [name,value] of Object.entries(ids)) if (!/^\d{17,20}$/.test(value || '')) issues.push(name);
   for(const [name,value] of [['CHANNEL_WEEKLY_ANALYTICS',c.channels.weekly],['CHANNEL_NEW_VIDEOS',c.channels.videos]]) if(value && !/^\d{17,20}$/.test(value)) issues.push(name);
   if(c.databaseUrl) { try { if(!['postgres:','postgresql:'].includes(new URL(c.databaseUrl).protocol)) issues.push('DATABASE_URL'); } catch { issues.push('DATABASE_URL'); } }
+  if(c.campaignId && !/^orgcamp_[A-Za-z0-9]+$/.test(c.campaignId)) issues.push('VIRAL_CAMPAIGN_ID');
   if(!Number.isInteger(c.port) || c.port<1 || c.port>65535) issues.push('PORT');
   for(const [name,value] of [['MIN_VIRAL_VIEWS',c.minViews],['MIN_FOLLOWERS',c.minFollowers],['SYNC_INTERVAL_MINUTES',c.syncIntervalMinutes],['STARTUP_RETRY_MS',c.startupRetryMs]]) if(!Number.isSafeInteger(value) || value<1) issues.push(name);
   if(c.syncIntervalMinutes>1440) issues.push('SYNC_INTERVAL_MINUTES');

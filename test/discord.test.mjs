@@ -154,3 +154,82 @@ test('AI logs provider HTTP failure without key or response body',async()=>{
   assert.match(JSON.stringify(logs),/HTTP_429/);
   assert.doesNotMatch(JSON.stringify(logs),/secret-key|sensitive response/);
 });
+
+const zeroCampaign={
+  ...snapshot,scope:{type:'campaign',id:'campaign-new',name:'Latest Footly campaign'},
+  accounts:Array.from({length:4},(_,index)=>({id:`participant-${index}`,username:`new${index+1}`,platform:'tiktok',viewCount:0,viewCountInPeriod:0,videoCount:0,videoCountInPeriod:0,followerCount:null,engagementRate:null,engagementRateInPeriod:null})),
+  videos:[],milestones:[],totals:{views:0,viewsGained:0,posts:0,accounts:4,videos:0,followers:null},
+  coverage:{inventoryComplete:true,periodComplete:true,periodAvailable:true,periodObservedAt:'2026-11-03T08:00:00Z',notes:[]},
+};
+
+test('campaign leaderboard and report keep all four zero participants and make no winner claim',()=>{
+  const ranking=presentation.rankingEmbed(zeroCampaign.accounts,4,'nedela',{snapshot:zeroCampaign}).toJSON();
+  const reports=presentation.reportEmbeds(zeroCampaign,'campaign').map(embed=>embed.toJSON());
+  const reportText=JSON.stringify(reports);
+  assert.match(ranking.description,/izramneti/i);
+  assert.match(JSON.stringify(ranking),/Latest Footly campaign/);
+  for(let index=1;index<=4;index++) {
+    assert.match(ranking.description,new RegExp(`new${index}`));
+    assert.match(reportText,new RegExp(`new${index}`));
+  }
+  assert.doesNotMatch(reportText,/Pregledajte go formatot|Profili za proverka/);
+  assert.match(reportText,/prvite objavi/);
+});
+
+test('zero campaign AI facts show scope and avoid fabricated winner or format advice',async()=>{
+  let calls=0;
+  const answer=await ai.answerQuestion('Koj kreator treba da go nagradime?',{getAnalytics:async()=>zeroCampaign,apiKey:'test',fetch:async()=>{calls++;throw new Error('not needed');}});
+  assert.match(answer,/Latest Footly campaign/);
+  assert.match(answer,/izramneti/i);
+  assert.match(answer,/prvite objavi/);
+  assert.doesNotMatch(answer,/Pregledajte gi najdobrite objavi/);
+  assert.equal(calls,0);
+});
+
+test('campaign report keys cannot collide with old organization report keys',async()=>{
+  const keys=[];
+  const closed={...zeroCampaign,period:{...zeroCampaign.period,from:'2026-11-02',to:'2026-11-02',end:new Date('2026-11-02T23:00:00Z')}};
+  const options={now:new Date('2026-11-03T08:05:00Z'),configuration:{campaignId:'campaign-new',timezone:'Europe/Skopje',reportCron:'0 9 * * *',weeklyReportCron:'0 9 * * 1',channels:{daily:'channel'}},isReady:()=>true,getAnalytics:async()=>closed,database:{query:async()=>({rowCount:1})},deliverOnce:async key=>keys.push(key)};
+  assert.equal(await botModule.postDailyReport(options),true);
+  assert.deepEqual(keys,['campaign:campaign-new:report:daily:2026-11-02:2026-11-02']);
+});
+
+test('campaign launch summary is immediately available and stable across retries',async()=>{
+  assert.equal(typeof botModule.postCampaignSummary,'function');
+  const keys=[];
+  const options={now:new Date('2026-11-03T01:00:00Z'),configuration:{campaignId:'campaign-new',timezone:'Europe/Skopje',channels:{daily:'channel'}},isReady:()=>true,getAnalytics:async()=>zeroCampaign,deliverOnce:async key=>keys.push(key)};
+  assert.equal(await botModule.postCampaignSummary(options),true);
+  assert.equal(await botModule.postCampaignSummary(options),true);
+  assert.deepEqual(keys,['campaign:campaign-new:launch-summary','campaign:campaign-new:launch-summary']);
+  options.getAnalytics=async()=>snapshot;
+  assert.equal(await botModule.postCampaignSummary(options),false);
+});
+
+test('AI explicit creator lookup stays in the campaign and recognizes exact aliases',()=>{
+  const scoped={...zeroCampaign,accounts:zeroCampaign.accounts.map((row,index)=>({...row,displayName:`Person ${index+1}`,aliases:[`alias${index+1}`]}))};
+  const known=ai.buildAIContext(scoped,'Kako raboti @alias2?');
+  assert.equal(known.rows.length,1);
+  assert.equal(known.rows[0].username,'new2');
+  const byName=ai.buildAIContext(scoped,'Kako raboti Person 3 ovaa nedela?');
+  assert.equal(byName.rows.length,1);
+  assert.equal(byName.rows[0].username,'new3');
+  const unavailable=ai.buildAIContext(scoped,'Kako raboti @oldcreator?');
+  assert.equal(unavailable.rows.length,0);
+  assert.match(ai.factualAnswer(unavailable),/Nema kreator/);
+  const noSubstring=ai.buildAIContext(scoped,'Dali new22 e najdobar?');
+  assert.equal(noSubstring.rows.length,4);
+});
+
+test('kreator command resolves campaign display name aliases without organization lookup',async()=>{
+  const replies=[];
+  const interaction={guildId:'guild',isChatInputCommand:()=>true,commandName:'kreator',options:{getString:name=>name==='username'?'alias2':null},deferReply:async()=>{},editReply:async payload=>replies.push(payload)};
+  await botModule.handleInteraction(interaction,{guildId:'guild',getAnalytics:async()=>({...zeroCampaign,accounts:zeroCampaign.accounts.map((row,index)=>({...row,aliases:[`alias${index+1}`]}))})});
+  assert.match(JSON.stringify(replies[0]),/new2/);
+});
+
+test('campaign statistics use authoritative video total beyond the top-video list',()=>{
+  const snapshot={...zeroCampaign,videos:Array.from({length:300},(_,i)=>({id:String(i)})),totals:{...zeroCampaign.totals,videos:401}};
+  const count=presentation.statisticsEmbed(snapshot).toJSON().fields.find(field=>field.name==='Sledeni videa');
+  assert.equal(count.value,'401');
+  assert.equal(presentation.statisticsEmbed(zeroCampaign).toJSON().fields.find(field=>field.name==='Sledeni videa').value,'0');
+});

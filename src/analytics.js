@@ -1,6 +1,8 @@
 import { config } from './config.js';
-import { pool, getInventory } from './db.js';
+import { pool, getInventory, getCampaignSnapshot } from './db.js';
 import { reportingPeriod } from './utils.js';
+import {calculateCampaignAnalytics} from './campaign-analytics.js';
+export {calculateCampaignAnalytics} from './campaign-analytics.js';
 
 export function metricNumber(value) {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
@@ -122,8 +124,16 @@ export function calculateAnalytics({ accounts:sourceAccounts = [], videos:source
   };
 }
 
-export async function getAnalytics({period = 'week',now = new Date(),timezone = config.timezone,database = pool} = {}) {
+export async function getAnalytics({period = 'week',now = new Date(),timezone = config.timezone,database = pool,campaignId = config.campaignId} = {}) {
   const range = reportingPeriod(period,timezone,new Date(now));
+  if(campaignId) {
+    const snapshot=await getCampaignSnapshot(campaignId,database);
+    const {rows}=await database.query(`SELECT DISTINCT ON (payload #>> '{data,video,platform}',payload #>> '{data,video,platformVideoId}',payload #>> '{data,milestone}') payload
+      FROM viral_events WHERE event_type='video.views_milestone' AND payload #>> '{scope,id}'=$1
+      AND COALESCE(observed_at,received_at)>=$2 AND COALESCE(observed_at,received_at)<$3
+      ORDER BY payload #>> '{data,video,platform}',payload #>> '{data,video,platformVideoId}',payload #>> '{data,milestone}',received_at DESC`,[campaignId,range.start,range.end]);
+    return calculateCampaignAnalytics(snapshot,{campaignId,period,now,timezone,milestones:rows.map(row=>row.payload)});
+  }
   const client = await database.connect();
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');

@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import { getAnalytics } from './analytics.js';
 import { safeLink } from './utils.js';
-import { latinText, accountLabel, rankRows, numberText, percentText, periodText } from './presentation.js';
+import { latinText, accountLabel, rankRows, numberText, percentText, periodText, isCampaignUnstarted, creatorAliases } from './presentation.js';
 
 export function questionPeriod(question) {
   const text=latinText(question).toLowerCase();
@@ -16,6 +16,13 @@ export function questionPeriod(question) {
 
 export function buildAIContext(snapshot,question) {
   const text=latinText(question).toLowerCase();
+  const requested=[...text.matchAll(/@([a-z0-9_.-]+)/g)].map(match=>match[1].replace(/\.+$/,''));
+  const named=snapshot.accounts.filter(row=>creatorAliases(row).some(alias=>requested.length ? requested.includes(alias) :
+    alias.length>1 && new RegExp(`(^|[^a-z0-9_])${alias.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}($|[^a-z0-9_])`).test(text)));
+  const restrict=Boolean(requested.length || named.length);
+  const selectedAliases=new Set(named.flatMap(creatorAliases));
+  const selectedVideo=row=>!restrict || creatorAliases(row).some(alias=>selectedAliases.has(alias));
+  const scopeInfo={scope:snapshot.scope || null,zeroActivity:isCampaignUnstarted(snapshot),requestedUnavailable:requested.length>0 && !named.length};
   if(/viral/.test(text)) {
     const byVideo=new Map();
     for(const event of snapshot.milestones || []) {
@@ -25,8 +32,8 @@ export function buildAIContext(snapshot,question) {
       const previous=byVideo.get(key);
       if(!previous || Number(milestone)>previous.value) byVideo.set(key,{username:account.username,platform:account.platform || video.platform,value:Number(milestone),url:safeLink(video.url)});
     }
-    return {period:periodText(snapshot),metric:'milestone',unit:'pregledi (potvrden milestone)',videoQuestion:true,
-      rows:[...byVideo.values()].sort((a,b)=>b.value-a.value).slice(0,5),totalTrackedCreators:snapshot.accounts.length,syncedAt:snapshot.syncedAt,
+    return {...scopeInfo,period:periodText(snapshot),metric:'milestone',unit:'pregledi (potvrden milestone)',videoQuestion:true,
+      rows:[...byVideo.values()].filter(selectedVideo).sort((a,b)=>b.value-a.value).slice(0,5),totalTrackedCreators:snapshot.accounts.length,syncedAt:snapshot.syncedAt,
       coverage:{...snapshot.coverage,notes:[...(snapshot.coverage?.notes || []),'Prikazhani se zabelezhani milestones vo periodot; otkrivanjeto zavisi od Viral.app sync.']}};
   }
   const metric=/engagement/.test(text) ? (snapshot.period.key==='all'?'engagementRate':'engagementRateInPeriod')
@@ -34,15 +41,11 @@ export function buildAIContext(snapshot,question) {
     : /redov|konzistent|objav/.test(text) ? 'videoCountInPeriod'
     : snapshot.period.key==='all'?'viewCount':'viewCountInPeriod';
   const videoQuestion=/vide[aoot]|viral/.test(text);
-  const rows=videoQuestion?snapshot.videos:snapshot.accounts;
+  const rows=videoQuestion?snapshot.videos.filter(selectedVideo):restrict?named:snapshot.accounts;
   const actualMetric=videoQuestion && !metric.startsWith('viewCount') ? 'viewCountInPeriod' : metric;
-  const named=rows.filter(row=>{
-    const name=latinText(row.username || row.accountUsername || '').toLowerCase();
-    return name.length>1 && text.includes(name);
-  });
-  const selected=rankRows(named.length?named:rows,actualMetric,5);
+  const selected=rankRows(rows,actualMetric,5);
   const unit=actualMetric.includes('engagement')?'engagement':actualMetric.includes('follower')?'sledbenici':actualMetric.includes('videoCount')?'objavi':'pregledi';
-  return {period:periodText(snapshot),metric:actualMetric,unit,videoQuestion,
+  return {...scopeInfo,period:periodText(snapshot),metric:actualMetric,unit,videoQuestion,
     rows:selected.map(row=>({username:row.username || row.accountUsername,platform:row.platform,value:row[actualMetric],...(videoQuestion?{url:safeLink(row.url)}:{})})),
     totalTrackedCreators:snapshot.accounts.length,syncedAt:snapshot.syncedAt,coverage:snapshot.coverage};
 }
@@ -50,7 +53,10 @@ export function buildAIContext(snapshot,question) {
 export function factualAnswer(context) {
   const facts=context.rows.map((row,index)=>`${index+1}. ${row.url?`[${accountLabel(row)}](${row.url})`:accountLabel(row)} (${latinText(row.platform || '')}): **${context.metric.includes('engagement')?percentText(row.value):numberText(row.value)}** ${context.unit}`);
   const notes=(context.coverage?.notes || []).join(' ');
-  return `**Fakti — ${context.period}**\n${facts.join('\n') || 'Nema dovolno podatoci za ova prashanje.'}${notes?`\n\n**Opfat:** ${notes}`:''}`;
+  const scope=context.scope?.type==='campaign'?`**Kampanja: ${latinText(context.scope.name)}**\n`:'';
+  if(context.requestedUnavailable) return `${scope}Nema kreator so toa korisnichko ime vo ${context.scope?.type==='campaign'?'tekovnata kampanja':'sledeniot opfat'}.`;
+  const zero=context.zeroActivity?`Site ${context.totalTrackedCreators} kreatori se izramneti: 0 pregledi i 0 objavi vo kampanjata. Se ushte nema lider.\n`:'';
+  return `${scope}**Fakti — ${context.period}**\n${zero}${facts.join('\n') || 'Nema dovolno podatoci za ova prashanje.'}${notes?`\n\n**Opfat:** ${notes}`:''}`;
 }
 
 export async function answerQuestion(question,options={}) {
@@ -59,7 +65,7 @@ export async function answerQuestion(question,options={}) {
   const snapshot=await load({period:questionPeriod(question)});
   const context=buildAIContext(snapshot,question);
   const facts=factualAnswer(context);
-  const fallback=context.rows.length ? 'Pregledajte gi najdobrite objavi i testirajte slichni formati. Potvrdete go opfatot pred nagradi ili promeni vo budzhet.' : 'Pochekajte sinhronizacija i dovolno istorija pred sporedba na kreatorite.';
+  const fallback=context.requestedUnavailable ? 'Proveri go korisnichkoto ime ili pogledni gi uchesnicite so /leaderboard.' : context.zeroActivity ? 'Pochekajte gi prvite objavi vo kampanjata. Se ushte nema osnova za nagradi ili sporedba na rezultatite.' : context.rows.length ? 'Pregledajte gi najdobrite objavi i testirajte slichni formati. Potvrdete go opfatot pred nagradi ili promeni vo budzhet.' : 'Pochekajte sinhronizacija i dovolno istorija pred sporedba na kreatorite.';
   let advice=fallback;
   const recommendations={
     review_top_posts:'Pregledajte gi najdobrite objavi i zabelezhete shto mozhe da se testira kaj drugi kreatori.',
@@ -69,7 +75,7 @@ export async function answerQuestion(question,options={}) {
     collect_history:'Soberete povekje istorija i sporedete isti periodi pred zakluchok za trend.',
   };
   const apiKey=options.apiKey ?? config.openaiKey;
-  if(apiKey && context.rows.length) {
+  if(apiKey && context.rows.length && !context.zeroActivity) {
     try {
       const response=await (options.fetch || fetch)('https://api.openai.com/v1/responses',{
         method:'POST',redirect:'error',headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},

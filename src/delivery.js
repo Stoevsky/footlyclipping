@@ -13,6 +13,14 @@ export async function guildChannel(client, channelId, guildId) {
 const markerFor = key => `ref ${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
 const plainEmbeds = embeds => (Array.isArray(embeds) ? embeds : [embeds]).map(embed => structuredClone(typeof embed.toJSON === 'function' ? embed.toJSON() : embed));
 
+export function scopedDeliveryKey(key,campaignId=config.campaignId) {
+  if(!campaignId) return key;
+  const prefix=`campaign:${campaignId}:`;
+  if(key.startsWith(prefix)) return key;
+  if(key.startsWith('campaign:')) throw new Error('Delivery campaign scope does not match the active campaign');
+  return `${prefix}${key}`;
+}
+
 function deliveryPayload(key, embeds) {
   const result = plainEmbeds(embeds);
   if (!result.length || result.length > 10) throw new Error('Invalid delivery embeds');
@@ -45,7 +53,7 @@ export function postgresDeliveryStore(database = pool) {
         connection.release(discard);
       }
     },
-    listPending:async()=> (await database.query("SELECT * FROM notification_deliveries WHERE status IN ('pending','sending') ORDER BY created_at LIMIT 50")).rows,
+    listPending:async(prefix=null)=> (await database.query("SELECT * FROM notification_deliveries WHERE status IN ('pending','sending') AND ($1::text IS NULL OR left(key,length($1))=$1) ORDER BY created_at LIMIT 50",[prefix])).rows,
   };
 }
 
@@ -67,9 +75,10 @@ async function findDelivered(channel, botId, key, since) {
   throw new Error('Discord delivery reconciliation needs more message history');
 }
 
-export function createDeliveryService({client,guildId,store = postgresDeliveryStore()} = {}) {
+export function createDeliveryService({client,guildId,campaignId,store = postgresDeliveryStore()} = {}) {
   async function deliverOnce(key,channelId,embeds) {
     if (!key || typeof key !== 'string') throw new Error('Delivery key is required');
+    key=scopedDeliveryKey(key,campaignId);
     const channel = await guildChannel(client,channelId,guildId);
     return store.withLock(key,async(lockedStore = store)=>{
       let row = await lockedStore.get(key);
@@ -92,9 +101,11 @@ export function createDeliveryService({client,guildId,store = postgresDeliverySt
     });
   }
   return {deliverOnce,async recoverPendingDeliveries() {
-    const pending = await store.listPending();
+    const prefix=campaignId ? `campaign:${campaignId}:` : null;
+    const pending = await store.listPending(prefix);
     const results = [];
     for (const row of pending) {
+      if(prefix && !row.key.startsWith(prefix)) continue;
       try { results.push({key:row.key,messageId:await deliverOnce(row.key,row.channel_id,row.payload)}); }
       catch { results.push({key:row.key,error:'DELIVERY_RETRY_FAILED'}); }
     }
@@ -106,7 +117,7 @@ let service;
 async function defaultService() {
   if (!service) {
     const {bot} = await import('./bot.js');
-    service = createDeliveryService({client:bot,guildId:config.guildId});
+    service = createDeliveryService({client:bot,guildId:config.guildId,campaignId:config.campaignId});
   }
   return service;
 }

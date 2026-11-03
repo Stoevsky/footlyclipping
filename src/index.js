@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { config, configIssues } from './config.js';
-import { setupDatabase, pool } from './db.js';
-import { bot, registerCommands, updateLeaderboard, postDailyReport, postWeeklyReport } from './bot.js';
+import { setupDatabase, pool, getCampaignSnapshot } from './db.js';
+import { bot, registerCommands, updateLeaderboard, postDailyReport, postWeeklyReport, postCampaignSummary } from './bot.js';
 import { startHttpServer, processQueue } from './webhooks.js';
 import { syncAnalytics } from './sync.js';
 import { retryUntilReady, createJob, safeError, shouldRetryInitialSync } from './runtime.js';
@@ -23,26 +23,37 @@ async function readiness() {
   let lastSync = null;
   if(databaseInitialized && !shuttingDown) {
     try {
-      const {rows}=await pool.query("SELECT completed_at FROM synchronization_history WHERE status='success' ORDER BY completed_at DESC LIMIT 1");
+      if(config.campaignId) {
+        const snapshot=await getCampaignSnapshot(config.campaignId);
+        lastSync=snapshot?.syncedAt ? new Date(snapshot.syncedAt).getTime() : null;
+      } else {
+        const {rows}=await pool.query("SELECT completed_at FROM synchronization_history WHERE status='success' AND scope_key='organization' ORDER BY completed_at DESC LIMIT 1");
+        lastSync=rows[0]?.completed_at?.getTime() ?? null;
+      }
       database = true;
-      lastSync = rows[0]?.completed_at?.getTime() ?? null;
     } catch { /* readiness must fail closed */ }
   }
   const discord = discordConfigured && bot.isReady();
-  const analytics = lastSync !== null && Date.now()-lastSync < Math.max(config.syncIntervalMinutes*120000,300000);
+  const analytics = (!config.campaignId || initialSyncComplete) && lastSync !== null && Date.now()-lastSync < Math.max(config.syncIntervalMinutes*120000,300000);
   return {ready:!shuttingDown && !issues.length && database && discord && analytics && jobsInitialized, configuration:issues.length===0, database, discord, analytics, jobs:jobsInitialized};
 }
 const server = startHttpServer({readiness});
 server.on('error', error=>{console.error(`[http] Listener failed (${safeError(error)})`);void close(1);});
 
 const syncJob = createJob('sync', async()=>{
-  if(!databaseInitialized || !config.apiKey || shuttingDown || issues.some(key=>['REPORT_TIMEZONE','VIRAL_MILESTONES','SYNC_INTERVAL_MINUTES'].includes(key))) return;
+  if(!databaseInitialized || !config.apiKey || shuttingDown || issues.some(key=>['REPORT_TIMEZONE','VIRAL_MILESTONES','SYNC_INTERVAL_MINUTES','VIRAL_CAMPAIGN_ID'].includes(key))) return;
   let result;
   try { result = await syncAnalytics(); }
   catch(error) {initialSyncRetryable=shouldRetryInitialSync(error);throw error;}
   initialSyncComplete = true;
   console.info(`[sync] Stored ${result.accounts} creators, ${result.videos} videos, ${result.events} new milestone events`);
-  if(bot.isReady()) await updateLeaderboard(false);
+  if(discordConfigured && bot.isReady()) {
+    await updateLeaderboard(false);
+    await campaignSummaryJob();
+  }
+});
+const campaignSummaryJob = createJob('campaign-summary',async()=>{
+  if(databaseInitialized && discordConfigured && bot.isReady() && !shuttingDown) await postCampaignSummary();
 });
 const queueJob = createJob('queue',async()=>{
   if(databaseInitialized && discordConfigured && bot.isReady() && !shuttingDown) await processQueue();
@@ -109,7 +120,7 @@ async function initialize() {
   timers.push(setInterval(()=>void recoveryJob(),60000));
   await recoveryJob();
   // Report functions check local due time + durable keys. Retrying also catches a missed 09:00 after restart.
-  timers.push(setInterval(()=>{void dailyJob();void weeklyJob();},60000));
+  timers.push(setInterval(()=>{void dailyJob();void weeklyJob();void campaignSummaryJob();},60000));
   await syncJob();
   await dailyJob();
   await weeklyJob();

@@ -46,3 +46,14 @@ test('failed history lookup never sends a possible duplicate',async()=>{
   await assert.rejects(()=>service.deliverOnce('k','channel',{title:'Test'}));
   assert.equal(f.messages.length,0);
 });
+
+test('campaign delivery scopes new keys and never recovers old organization messages',async()=>{
+  const f=fixture(),service=delivery.createDeliveryService({...f,guildId:'guild',campaignId:'new'});
+  await f.store.create('report:daily:old','channel',[{title:'Old organization data'}]);
+  await f.store.create('campaign:old:report:daily:old','channel',[{title:'Old campaign data'}]);
+  await service.recoverPendingDeliveries();
+  assert.equal(f.messages.length,0);
+  await service.deliverOnce('report:daily:today','channel',{title:'Current campaign'});
+  assert.equal(f.rows.get('campaign:new:report:daily:today').status,'sent');
+  await assert.rejects(()=>service.deliverOnce('campaign:old:alert','channel',{title:'Old campaign'}),/scope/i);
+});

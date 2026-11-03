@@ -108,23 +108,62 @@ export function createWebhookRefresher({ sync = syncAnalytics, update = async ()
 }
 const defaultRefresh = createWebhookRefresher();
 
-export async function handleQueuedEvent(row, { deliver = defaultDeliver, refresh = defaultRefresh, legacyHighest = db.getHighest, channels = config.channels, minViews = config.minViews, minFollowers = config.minFollowers } = {}) {
-  const event = row.payload;
+async function scopedCampaignEvent(event, campaignId, inventory, refresh) {
+  if (event.campaignId && event.campaignId !== campaignId || event.scope?.id && event.scope.id !== campaignId) return null;
+  const maxAge = Math.max(5 * 60000, (config.syncIntervalMinutes || 60) * 120000);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const snapshot = await inventory(campaignId);
+    const fresh = snapshot?.campaign?.id === campaignId && Number.isFinite(Date.parse(snapshot.syncedAt)) && Date.now() - Date.parse(snapshot.syncedAt) <= maxAge;
+    if (fresh) {
+      const incoming = event.data.account;
+      const creator = snapshot.creators.find(row => row.accounts?.some(account => account.id === incoming?.id && account.platform === incoming.platform && account.platformAccountId === incoming.platformAccountId));
+      if (!creator) return null;
+      const account = creator.accounts.find(row => row.id === incoming.id);
+      const starts = Date.parse(creator.assignmentValidFrom);
+      const ends = Date.parse(creator.assignmentValidUntil);
+      const observed = Date.parse(event.data.observedAt || event.timestamp);
+      if (Number.isFinite(starts) && observed < starts || Number.isFinite(ends) && observed > ends) return null;
+      if (event.type === 'account.followers_milestone') {
+        // Follower levels have no campaign analytics metric. Only a signed crossing
+        // observed during this verified assignment may describe a member's growth.
+        if (!Number.isFinite(starts) || !Number.isFinite(observed)) return null;
+        return { ...event, campaignId, scope: { type: 'campaign', id: campaignId }, data: { ...event.data, account } };
+      }
+      const id = `${event.data.video?.platform}:${event.data.video?.platformVideoId}`;
+      const video = snapshot.periods?.find(period => period.key === 'all')?.videos?.find(row => row.id === id && row.accountId === account.id);
+      if (video && (event.type !== 'video.views_milestone' || Number.isFinite(video.viewCount) && video.viewCount >= event.data.milestone)) {
+        return { ...event, campaignId, scope: { type: 'campaign', id: campaignId }, data: { ...event.data, account, video, viewCount: video.viewCount } };
+      }
+    }
+    if (!attempt) await refresh();
+  }
+  // Unknown eligibility (including a video outside the source's top 300) fails closed.
+  return null;
+}
+
+export async function handleQueuedEvent(row, { deliver = defaultDeliver, refresh = defaultRefresh, legacyHighest = db.getHighest, channels = config.channels, minViews = config.minViews, minFollowers = config.minFollowers, campaignId = config.campaignId, campaignInventory = db.getCampaignSnapshot } = {}) {
+  let event = row.payload;
+  if (campaignId && ['video.views_milestone','video.published','account.followers_milestone'].includes(event.type)) {
+    event = await scopedCampaignEvent(event, campaignId, campaignInventory, refresh);
+    if (!event) return;
+  }
   const { account, video, milestone } = event.data || {};
   if (account?.isCompetitor || video?.isCompetitor) return;
+  const prefix = campaignId ? `campaign:${campaignId}:` : '';
   if (event.type === 'video.views_milestone' && milestone >= minViews) {
     // Old installations recorded only the highest sent threshold. Preserve that history
     // while all new deliveries use their separate durable per-threshold keys.
-    if (milestone <= await legacyHighest('video_milestones', `${video.platform}:${video.platformVideoId}`)) return;
-    await deliver(`video:${video.platform}:${video.platformVideoId}:${milestone}`, channels.viral, viralEmbed(event));
+    if (!campaignId && milestone <= await legacyHighest('video_milestones', `${video.platform}:${video.platformVideoId}`)) return;
+    await deliver(`${prefix}video:${video.platform}:${video.platformVideoId}:${milestone}`, channels.viral, viralEmbed(event));
   } else if (event.type === 'account.followers_milestone' && milestone >= minFollowers) {
-    if (milestone <= await legacyHighest('account_milestones', account.id || `${account.platform}:${account.platformAccountId}`)) return;
-    await deliver(`account:${account.platform}:${account.platformAccountId}:${milestone}`, channels.growth, followersEmbed(event));
+    if (!campaignId && milestone <= await legacyHighest('account_milestones', account.id || `${account.platform}:${account.platformAccountId}`)) return;
+    await deliver(`${prefix}account:${account.platform}:${account.platformAccountId}:${milestone}`, channels.growth, followersEmbed(event));
   } else if (event.type === 'video.published' && channels.videos) {
-    await deliver(`published:${video.platform}:${video.platformVideoId}`, channels.videos, publishedEmbed(event));
+    await deliver(`${prefix}published:${video.platform}:${video.platformVideoId}`, channels.videos, publishedEmbed(event));
   } else if (event.type === 'organization.synced' || event.type === 'sync.completed') {
     await refresh();
   }
+  return campaignId && event.scope?.id === campaignId ? event : undefined;
 }
 
 export function createQueueProcessor({ database = db, handle = handleQueuedEvent } = {}) {
@@ -147,8 +186,8 @@ export function createQueueProcessor({ database = db, handle = handleQueuedEvent
         const row = rows[0];
         if (!row) break;
         try {
-          await handle(row);
-          await connection.query("UPDATE viral_events SET status='done', processed_at=now(), processing_at=NULL, error=NULL WHERE id=$1", [row.id]);
+          const handled = await handle(row);
+          await connection.query("UPDATE viral_events SET status='done', processed_at=now(), processing_at=NULL, error=NULL, payload=COALESCE($2::jsonb,payload) WHERE id=$1", [row.id, handled?.scope?.type === 'campaign' ? JSON.stringify(handled) : null]);
         } catch {
           const backoff = Math.min(3600, 20 * 2 ** Math.min(row.attempts || 1, 7));
           await connection.query(`UPDATE viral_events SET status=$2, error=$3, processing_at=NULL, available_at=now()+($4::integer*interval '1 second') WHERE id=$1`, [row.id, (row.attempts || 1) >= 12 ? 'failed' : 'pending', 'EVENT_PROCESSING_FAILED', backoff]);

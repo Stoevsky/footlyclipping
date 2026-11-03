@@ -55,15 +55,16 @@ export function createViralClient({ apiKey, fetchImpl = fetch, sleep = delay, ma
     }
     throw new Error('Viral.app request attempts exhausted');
   }
-  async function all(path, params = {}) {
+  async function all(path, params = {}, { metadata = false } = {}) {
     const rows = [];
     const ids = new Set();
     let expected;
     let pages;
+    let first;
     for (let page = 1; page <= 10000; page++) {
-      const result = await get(path, { ...params, viewMode: 'internal', page, perPage: 100 });
+      const result = await get(path, { ...params, ...(['/accounts','/videos'].includes(path) ? { viewMode: 'internal' } : {}), page, perPage: 100 });
       if (!Array.isArray(result?.data) || !Number.isInteger(result.pageCount) || result.pageCount < 0 || result.pageCount > 10000 || !Number.isInteger(result.totalRows) || result.totalRows < 0) throw new Error('Viral.app pagination response is invalid');
-      if (page === 1) { expected = result.totalRows; pages = result.pageCount; }
+      if (page === 1) { expected = result.totalRows; pages = result.pageCount; first = result; }
       if (expected !== result.totalRows || pages !== result.pageCount) throw new Error('Viral.app pagination changed during sync; retry required');
       for (const row of result.data) {
         // /videos has a nullable internal id until analytics load; platform identity is stable.
@@ -74,7 +75,7 @@ export function createViralClient({ apiKey, fetchImpl = fetch, sleep = delay, ma
       }
       if (page >= pages) {
         if (rows.length !== expected) throw new Error('Viral.app pagination is incomplete');
-        return rows;
+        return metadata ? { ...first, data: rows } : rows;
       }
       if (!result.data.length) throw new Error('Viral.app pagination ended prematurely');
     }
@@ -95,7 +96,23 @@ export function createViralClient({ apiKey, fetchImpl = fetch, sleep = delay, ma
     if (!Array.isArray(data) || data.some(v => v.isCompetitor)) throw new Error('Viral.app video metrics response is invalid');
     return data;
   }
-  return { get, accounts: () => all('/accounts', { sortCol: 'createdAt', sortDir: 'asc' }), videos: () => all('/videos', { sortCol: 'publishedAt', sortDir: 'asc' }), periodAccounts, periodVideos };
+  const campaignParams = (id, { from, to }, scope, creatorIds) => {
+    if (typeof id !== 'string' || !id) throw new Error('Campaign id is required');
+    return { campaignIds: [id], creatorIds, scope, 'dateRange[from]': from, 'dateRange[to]': to, publicationMode: 'allEligible' };
+  };
+  return {
+    get, accounts: () => all('/accounts', { sortCol: 'createdAt', sortDir: 'asc' }), videos: () => all('/videos', { sortCol: 'publishedAt', sortDir: 'asc' }), periodAccounts, periodVideos,
+    campaign: id => get(`/campaigns/${encodeURIComponent(id)}`),
+    creator: id => get(`/creators/${encodeURIComponent(id)}`),
+    campaignCreators: id => all('/creators', { campaigns: [id], sortCol: 'createdAt', sortDir: 'asc' }),
+    campaignPerformance: (id, range, scope = 'dateRange', creatorIds) => all('/creator-hub/overview/performance', { ...campaignParams(id, range, scope, creatorIds), sortCol: 'creatorName', sortDir: 'asc' }, { metadata: true }),
+    campaignKpis: (id, range, scope = 'dateRange', creatorIds) => get('/creator-hub/overview/kpis', campaignParams(id, range, scope, creatorIds)),
+    campaignVideos: async (id, range, scope = 'dateRange', creatorIds) => {
+      const rows = await get('/creator-hub/overview/top-videos', { ...campaignParams(id, range, scope, creatorIds), metric: 'viewCountInPeriod', limit: 300 });
+      if (!Array.isArray(rows) || rows.length > 300 || rows.some(v => v.isCompetitor)) throw new Error('Viral.app campaign videos response is invalid');
+      return rows;
+    },
+  };
 }
 
 export const viralClient = createViralClient({ apiKey: config.apiKey });

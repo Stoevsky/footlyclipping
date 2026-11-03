@@ -32,7 +32,7 @@ export async function transaction(database, operation) {
 }
 
 export async function setupDatabase(database = pool) {
-  const migrations = await Promise.all(['001_analytics.sql','002_event_observation.sql'].map(async (file,index) => ({version:index+1,sql:await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')})));
+  const migrations = await Promise.all(['001_analytics.sql','002_event_observation.sql','003_campaign_scope.sql'].map(async (file,index) => ({version:index+1,sql:await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')})));
   await transaction(database, async client => {
     await client.query('SELECT pg_advisory_xact_lock(706923004)');
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())');
@@ -117,15 +117,59 @@ export const persistAnalytics = saveSync;
 export async function getInventory(database = pool) {
   const accounts = await database.query('SELECT payload FROM creators WHERE active ORDER BY id');
   const videos = await database.query('SELECT payload FROM tracked_videos WHERE active ORDER BY id');
-  const latest = await database.query("SELECT completed_at,coverage FROM synchronization_history WHERE status='success' ORDER BY completed_at DESC,id DESC LIMIT 1");
+  const latest = await database.query("SELECT completed_at,coverage FROM synchronization_history WHERE status='success' AND scope_key='organization' ORDER BY completed_at DESC,id DESC LIMIT 1");
   return { accounts:accounts.rows.map(row => row.payload), videos:videos.rows.map(row => row.payload),
     syncedAt:latest.rows[0]?.completed_at?.toISOString() ?? null, coverage:latest.rows[0]?.coverage ?? {complete:false} };
 }
 
-export async function recordSyncFailure(error, database = pool) {
+export async function recordSyncFailure(error, databaseOrScope = pool, explicitScope = 'organization') {
+  const database = typeof databaseOrScope === 'string' ? pool : databaseOrScope;
+  const scope = typeof databaseOrScope === 'string' ? databaseOrScope : explicitScope;
   const code = typeof error === 'string' ? error : error?.code;
   const safeCode = /^[A-Z0-9_]{1,60}$/.test(code || '') ? code : 'SYNC_FAILED';
-  await database.query("INSERT INTO synchronization_history(completed_at,status,error_code) VALUES(now(),'failed',$1)", [safeCode]);
+  await database.query("INSERT INTO synchronization_history(completed_at,status,error_code,scope_key) VALUES(now(),'failed',$1,$2)", [safeCode,scope]);
+}
+
+const campaignCache = new Map();
+export function getCachedCampaignSnapshot(campaignId) {
+  return campaignCache.get(campaignId) ?? null;
+}
+
+export async function getCampaignSnapshot(campaignId, database = pool) {
+  if (!campaignId) return null;
+  const {rows}=await database.query('SELECT payload FROM campaign_analytics_snapshots WHERE campaign_id=$1 ORDER BY observed_at DESC LIMIT 1',[campaignId]);
+  const snapshot=rows[0]?.payload ?? null;
+  if(snapshot) campaignCache.set(campaignId,snapshot);
+  else campaignCache.delete(campaignId);
+  return snapshot;
+}
+
+export async function persistCampaignSnapshot(input, database = pool) {
+  const campaignId=requireId(input.campaign);
+  if(!Array.isArray(input.creators) || !Array.isArray(input.periods)) throw new Error('Campaign roster and periods are required');
+  const creatorIds=input.creators.map(requireId);
+  if(new Set(creatorIds).size!==creatorIds.length) throw new Error('Campaign roster contains duplicate creators');
+  for(const period of input.periods) {
+    if(!period.key || !Array.isArray(period.creators) || !Array.isArray(period.videos)) throw new Error('Invalid campaign period');
+    const ids=period.creators.map(requireId);
+    if(new Set(ids).size!==ids.length || ids.some(id=>!creatorIds.includes(id))) throw new Error('Campaign period contains a creator outside its roster');
+  }
+  const at=new Date(input.syncedAt);
+  if(!Number.isFinite(at.getTime())) throw new Error('Invalid campaign synchronization timestamp');
+  const {events=[],...data}=input;
+  const snapshot={...data,syncedAt:at.toISOString()};
+  await transaction(database,async client=>{
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`campaign-sync:${campaignId}`]);
+    await client.query('INSERT INTO campaign_analytics_snapshots(campaign_id,observed_at,payload) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[campaignId,at,snapshot]);
+    for(const event of events) await enqueueEvent({...event,scope:{type:'campaign',id:campaignId}},client);
+    const all=input.periods.find(period=>period.key==='all');
+    await client.query("INSERT INTO synchronization_history(completed_at,status,account_count,video_count,coverage,scope_key) VALUES($1,'success',$2,$3,$4,$5)",
+      [at,creatorIds.length,all?.totals?.eligibleVideoCount ?? all?.videos.length ?? 0,{complete:true,campaignId},`campaign:${campaignId}`]);
+  });
+  // Update only after commit, and never replace a newer cached scope snapshot.
+  const previous=campaignCache.get(campaignId);
+  if(!previous || new Date(previous.syncedAt)<=at) campaignCache.set(campaignId,JSON.parse(JSON.stringify(snapshot)));
+  return snapshot;
 }
 
 export async function getState(key) {

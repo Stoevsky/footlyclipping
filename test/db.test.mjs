@@ -43,7 +43,7 @@ test('real PostgreSQL migrations preserve old data, repeat, and sync atomically'
     await db.setupDatabase(database);
     await db.setupDatabase(database);
     assert.equal((await database.query('SELECT value FROM bot_state')).rows[0].value, 'existing123');
-    assert.equal((await database.query('SELECT count(*) FROM schema_migrations')).rows[0].count, '2');
+    assert.equal((await database.query('SELECT count(*) FROM schema_migrations')).rows[0].count, '3');
     const input = {
       accounts:[{id:'a1',username:'real_creator',platform:'tiktok',followerCount:null}],
       videos:[{id:'tiktok:v1',accountId:'a1',viewCount:100,likeCount:10,commentCount:2,shareCount:null}],
@@ -102,5 +102,37 @@ test('real PostgreSQL migrations preserve old data, repeat, and sync atomically'
     await database.end();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.end();
+  }
+});
+
+test('campaign persistence is isolated from organization data and fails closed on absent scope', {skip:!process.env.TEST_DATABASE_URL}, async()=>{
+  assert.equal(typeof db.persistCampaignSnapshot,'function');
+  const schema=`test_${randomUUID().replaceAll('-','')}`;
+  const admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const database=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  try {
+    await db.setupDatabase(database);
+    await db.saveSync({accounts:[{id:'old',viewCount:9000000}],videos:[],syncedAt:'2026-11-03T16:00:00Z'},database);
+    const before=await getAnalytics({period:'all',campaignId:'orgcamp_test',database});
+    assert.equal(before.accounts.length,0);
+    assert.equal(before.syncedAt,null);
+    const zero={viewCount:0,videoCount:0,eligibleVideoCount:0};
+    const creators=[1,2,3,4].map(index=>({id:`creator${index}`,username:`new${index}`,accounts:[]}));
+    const snapshot={campaign:{id:'orgcamp_test',name:'New'},creators,syncedAt:'2026-11-03T17:00:00Z',periods:[{key:'all',from:'1970-01-01',to:'2026-11-03',creators:creators.map(c=>({id:c.id,...zero})),videos:[],totals:zero,coverage:{performanceComplete:true},timeZone:'UTC'}]};
+    await db.persistCampaignSnapshot(snapshot,database);
+    await db.persistCampaignSnapshot(snapshot,database);
+    assert.equal((await db.getInventory(database)).accounts[0].viewCount,9000000);
+    assert.equal((await db.getCampaignSnapshot('orgcamp_test',database)).creators.length,4);
+    assert.equal(db.getCachedCampaignSnapshot('orgcamp_test').creators.length,4);
+    const current=await getAnalytics({period:'all',campaignId:'orgcamp_test',database,now:new Date(snapshot.syncedAt)});
+    assert.equal(current.accounts.length,4);
+    assert.equal(current.totals.views,0);
+    assert.equal((await database.query("SELECT count(*) FROM campaign_analytics_snapshots")).rows[0].count,'1');
+    assert.equal((await database.query("SELECT scope_key FROM synchronization_history ORDER BY id DESC LIMIT 1")).rows[0].scope_key,'campaign:orgcamp_test');
+    await assert.rejects(db.persistCampaignSnapshot({...snapshot,creators:[creators[0],creators[0]]},database));
+    assert.equal((await db.getCampaignSnapshot('orgcamp_test',database)).creators.length,4);
+  }finally{
+    await database.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();
   }
 });

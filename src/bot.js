@@ -3,13 +3,14 @@ import { config } from './config.js';
 import { getState, setState, pool } from './db.js';
 import { getAnalytics } from './analytics.js';
 import { localDate } from './utils.js';
-import { METRICS, rankingEmbed, videosEmbed, creatorEmbed, statisticsEmbed, reportEmbeds, latinText } from './presentation.js';
+import { METRICS, rankingEmbed, videosEmbed, creatorEmbed, statisticsEmbed, reportEmbeds, latinText, creatorAliases } from './presentation.js';
 import { answerQuestion } from './ai.js';
-import { deliverOnce, guildChannel } from './delivery.js';
+import { deliverOnce, guildChannel, scopedDeliveryKey } from './delivery.js';
 
 export const bot = new Client({intents:[GatewayIntentBits.Guilds]});
 const lastAIRequest=new Map();
 let lastLeaderboardRun=0, leaderboardUpdating=false;
+const inConfiguredScope=(snapshot,configuration=config)=>!configuration.campaignId || snapshot.scope?.type==='campaign' && snapshot.scope.id===configuration.campaignId;
 const PERIOD_CHOICES=[{name:'Denes',value:'today'},{name:'Vchera',value:'yesterday'},{name:'Ovaa nedela',value:'week'},
   {name:'Minatata nedela',value:'previous_week'},{name:'Ovoj mesec',value:'month'},{name:'Poslednite 30 dena',value:'last30'},{name:'Vkupno',value:'all'}];
 const withPeriod=command=>command.addStringOption(option=>option.setName('period').setDescription('Izberi period za izvestajot').addChoices(...PERIOD_CHOICES));
@@ -50,7 +51,7 @@ export async function updateLeaderboard(force=false) {
   leaderboardUpdating=true;
   try {
     const snapshot=await getAnalytics({period:'week'});
-    if(!snapshot.syncedAt) return false;
+    if(!snapshot.syncedAt || !inConfiguredScope(snapshot)) return false;
     const embed=rankingEmbed(snapshot.accounts,snapshot.accounts.length,'nedela',{snapshot});
     const channel=await guildChannel(bot,config.channels.leaderboard,config.guildId);
     const previous=await getState('leaderboard_message');
@@ -63,7 +64,7 @@ export async function updateLeaderboard(force=false) {
       } catch(error) {if(error.code!==10008) throw error;message=undefined;}
     }
     if(!message) {
-      const id=await deliverOnce(`leaderboard:${config.channels.leaderboard}:${previous || 'initial'}`,config.channels.leaderboard,embed);
+      const id=await deliverOnce(scopedDeliveryKey(`leaderboard:${config.channels.leaderboard}:${previous || 'initial'}`,snapshot.scope?.type==='campaign'?snapshot.scope.id:null),config.channels.leaderboard,embed);
       await setState('leaderboard_message',id);
     }
     lastLeaderboardRun=Date.now();
@@ -89,21 +90,31 @@ export async function postScheduledReport(type,options={}) {
   const channelId=type==='weekly' ? c.channels.weekly || c.channels.daily : c.channels.daily;
   if(!channelId || !ready() || !reportIsDue(type,now,c.timezone,type==='weekly'?c.weeklyReportCron:c.reportCron)) return false;
   const snapshot=await (options.getAnalytics || getAnalytics)({period:type==='weekly'?'previous_week':'yesterday',now,timezone:c.timezone});
+  if(!inConfiguredScope(snapshot,c)) return false;
   if(!snapshot.syncedAt || !Number.isFinite(Date.parse(snapshot.coverage.periodObservedAt)) || new Date(snapshot.syncedAt)<new Date(snapshot.period.end) || !snapshot.coverage.periodAvailable ||
     new Date(snapshot.coverage.periodObservedAt)<new Date(snapshot.period.end)) return false;
   if(snapshot.accounts.length && !snapshot.accounts.some(account=>account.viewCountInPeriod!=null)) return false;
   const database=options.database || pool;
   // Preserve v1's report claim to avoid repeating a report during an upgrade.
-  if(type==='daily') {
+  if(type==='daily' && snapshot.scope?.type!=='campaign') {
     const legacy=await database.query('SELECT report_key FROM sent_reports WHERE report_key=$1',[`daily:${localDate(now,c.timezone)}`]);
     if(legacy.rowCount) return false;
   }
-  const key=`report:${type}:${snapshot.period.from}:${snapshot.period.to}`;
+  const key=scopedDeliveryKey(`report:${type}:${snapshot.period.from}:${snapshot.period.to}`,snapshot.scope?.type==='campaign'?snapshot.scope.id:null);
   await (options.deliverOnce || deliverOnce)(key,channelId,reportEmbeds(snapshot,type));
   return true;
 }
 export async function postDailyReport(options) { return postScheduledReport('daily',options); }
 export async function postWeeklyReport(options) { return postScheduledReport('weekly',options); }
+
+export async function postCampaignSummary(options={}) {
+  const c=options.configuration || config;
+  if(!c.campaignId || !c.channels.daily || !(options.isReady || (()=>bot.isReady()))()) return false;
+  const snapshot=await (options.getAnalytics || getAnalytics)({period:'all',now:options.now || new Date(),timezone:c.timezone});
+  if(!inConfiguredScope(snapshot,c) || !snapshot.syncedAt || !snapshot.coverage.inventoryComplete) return false;
+  await (options.deliverOnce || deliverOnce)(scopedDeliveryKey('launch-summary',snapshot.scope.id),c.channels.daily,reportEmbeds(snapshot,'campaign'));
+  return true;
+}
 
 const replyPayload=embeds=>({embeds:Array.isArray(embeds)?embeds:[embeds],allowedMentions:{parse:[]}});
 export async function handleInteraction(interaction,dependencies={}) {
@@ -158,9 +169,9 @@ export async function handleInteraction(interaction,dependencies={}) {
     else if(name==='topvideos') await interaction.editReply(replyPayload(videosEmbed(snapshot,interaction.options.getString('metrika') || 'vkupno')));
     else if(name==='statistika') await interaction.editReply(replyPayload(statisticsEmbed(snapshot)));
     else if(name==='kreator') {
-      const username=interaction.options.getString('username',true).replace(/^@/,'').toLowerCase();
+      const username=latinText(interaction.options.getString('username',true)).trim().replace(/^@/,'').toLowerCase();
       const platform=interaction.options.getString('platforma')?.toLowerCase();
-      const matches=snapshot.accounts.filter(account=>String(account.username).toLowerCase()===username && (!platform || String(account.platform).toLowerCase()===platform));
+      const matches=snapshot.accounts.filter(account=>creatorAliases(account).includes(username) && (!platform || String(account.platform).toLowerCase()===platform || (account.connectedAccounts || []).some(row=>String(row.platform).toLowerCase()===platform)));
       if(matches.length>1) await interaction.editReply({content:'Najdov povekje profili. Dodadi platforma za tochniot kreator.',allowedMentions:{parse:[]}});
       else if(matches.length) await interaction.editReply(replyPayload(creatorEmbed(matches[0],snapshot)));
       else await interaction.editReply({content:'Nema sleden kreator so toa korisnichko ime.',allowedMentions:{parse:[]}});

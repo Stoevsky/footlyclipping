@@ -91,3 +91,30 @@ test('videos not loaded into analytics yet have nullable internal ids and stable
   const duplicate = client(async () => reply({ data: [{ id: null, platform: 'tiktok', platformVideoId: 'same' }], pageCount: 2, totalRows: 2 }));
   await assert.rejects(duplicate.videos(), /pagination/i);
 });
+
+test('campaign APIs preserve full roster and paginate authoritative campaign performance with explicit scope', async () => {
+  const urls = [];
+  const api = client(async url => {
+    const u = new URL(url); urls.push(u);
+    if (u.pathname.endsWith('/campaigns/orgcamp_test')) return reply({ id: 'orgcamp_test', name: 'Current' });
+    if (u.pathname.endsWith('/creators')) return reply({ data: [{ id: 'creator_a', accounts: [] }], pageCount: 1, totalRows: 1 });
+    if (u.pathname.endsWith('/top-videos')) return reply([]);
+    if (u.pathname.endsWith('/kpis')) return reply({ metrics: { totalViews: 0 } });
+    const page = Number(u.searchParams.get('page'));
+    return reply({ data: [{ id: `assignment_${page}`, creatorId: `creator_${page}`, totalViews: 0 }], pageCount: 2, totalRows: 2, totals: { totalViews: 0 }, timeZone: 'UTC', eligibilityRefreshedAt: null });
+  });
+  assert.equal((await api.campaign('orgcamp_test')).id, 'orgcamp_test');
+  assert.equal((await api.campaignCreators('orgcamp_test'))[0].accounts.length, 0);
+  const range = { from: '2026-11-01', to: '2026-11-03' };
+  assert.equal((await api.campaignPerformance('orgcamp_test', range, 'allTime')).data.length, 2);
+  await api.campaignVideos('orgcamp_test', range, 'allTime');
+  await api.campaignKpis('orgcamp_test', range, 'allTime');
+  assert.equal(urls.find(u => u.pathname.endsWith('/creators')).searchParams.get('campaigns[0]'), 'orgcamp_test');
+  for (const u of urls.filter(u => u.pathname.includes('/creator-hub/'))) {
+    assert.equal(u.searchParams.get('campaignIds[0]'), 'orgcamp_test');
+    assert.equal(u.searchParams.get('scope'), 'allTime');
+    assert.equal(u.searchParams.get('dateRange[from]'), range.from);
+    assert.equal(u.searchParams.has('viewMode'), false);
+  }
+  assert.equal(urls.find(u => u.pathname.endsWith('/top-videos')).searchParams.get('limit'), '300');
+});

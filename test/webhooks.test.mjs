@@ -138,3 +138,61 @@ test('queue discards a connection whose session advisory lock could not be relea
   await hooks.createQueueProcessor({ database: { pool: { connect: async () => connection } } })();
   assert.equal(discarded, true);
 });
+
+test('campaign queued alerts require verified eligible videos and rebuild metrics from campaign source', async () => {
+  const calls = [];
+  let refreshes = 0;
+  const campaignId = 'orgcamp_current';
+  const snapshot = {
+    campaign: { id: campaignId, validFrom: '2026-11-01T00:00:00Z' }, syncedAt: new Date().toISOString(),
+    creators: [{ id: 'creator_a', assignmentValidFrom: '2026-11-03T00:00:00Z', accounts: [event().data.account] }],
+    periods: [{ key: 'all', videos: [{ id: 'tiktok:123', platform: 'tiktok', platformVideoId: '123', accountId: 'orgacc_a', viewCount: 12000, likeCount: 30, publishedAt: '2026-11-03T08:00:00Z' }] }],
+  };
+  const options = { campaignId, campaignInventory: async () => snapshot, deliver: async (...args) => calls.push(args), refresh: async () => { refreshes++; }, legacyHighest: async () => assert.fail('organization legacy history must not control campaign'), channels: { viral: 'channel_1' }, minViews: 10000 };
+  await hooks.handleQueuedEvent({ payload: { ...event(), data: { ...event().data, viewCount: 9000000 } } }, options);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], `campaign:${campaignId}:video:tiktok:123:10000`);
+  assert.match(JSON.stringify(calls[0][2].toJSON()), /12\.000|12,000/);
+  assert.doesNotMatch(JSON.stringify(calls[0][2].toJSON()), /9[.,]000[.,]000/);
+  await hooks.handleQueuedEvent({ payload: { ...event(), data: { ...event().data, video: { ...event().data.video, platformVideoId: 'old_video' } } } }, options);
+  await hooks.handleQueuedEvent({ payload: { ...event(), campaignId: 'orgcamp_old' } }, options);
+  await hooks.handleQueuedEvent({ payload: { ...event(), scope: { type: 'campaign', id: 'orgcamp_old' } } }, options);
+  await hooks.handleQueuedEvent({ payload: { ...event(), data: { ...event().data, account: { ...event().data.account, id: 'old_account' } } } }, options);
+  assert.equal(calls.length, 1);
+  assert.ok(refreshes >= 1);
+});
+
+test('queue persists only the verified campaign payload after delivery so campaign reports see provider milestones', async () => {
+  const campaignId = 'orgcamp_current';
+  const raw = { ...event(), data: { ...event().data, viewCount: 9000000 } };
+  const snapshot = { campaign: { id: campaignId }, syncedAt: new Date().toISOString(), creators: [{ id: 'creator_a', assignmentValidFrom: '2026-11-03T00:00:00Z', accounts: [event().data.account] }], periods: [{ key: 'all', videos: [{ id: 'tiktok:123', platform: 'tiktok', platformVideoId: '123', accountId: 'orgacc_a', viewCount: 12000 }] }] };
+  let claimed = false;
+  let payload;
+  const connection = {
+    query: async (sql, params) => {
+      if (sql.includes('pg_try_advisory_lock')) return { rows: [{ acquired: true }] };
+      if (sql.includes('RETURNING *') && !claimed) { claimed = true; return { rows: [{ id: raw.id, payload: raw }] }; }
+      if (sql.includes("status='done'")) payload = params?.[1];
+      return { rows: [] };
+    }, release() {},
+  };
+  const process = hooks.createQueueProcessor({ database: { pool: { connect: async () => connection } }, handle: row => hooks.handleQueuedEvent(row, { campaignId, campaignInventory: async () => snapshot, deliver: async () => {}, refresh: async () => {}, channels: { viral: 'channel' }, minViews: 10000 }) });
+  await process();
+  const scoped = JSON.parse(payload);
+  assert.deepEqual(scoped.scope, { type: 'campaign', id: campaignId });
+  assert.equal(scoped.data.viewCount, 12000);
+  assert.equal(scoped.data.video.viewCount, 12000);
+  snapshot.periods[0].videos = [];
+  claimed = false; payload = undefined;
+  await process();
+  assert.equal(payload, null);
+});
+
+test('campaign refuses lifetime-only threshold crossings and queued events before assignment', async () => {
+  const campaignId = 'orgcamp_current';
+  const snapshot = { campaign: { id: campaignId, validFrom: '2026-11-01T00:00:00Z' }, creators: [{ id: 'creator_a', assignmentValidFrom: '2026-11-03T00:00:00Z', accounts: [event().data.account] }], periods: [{ key: 'all', videos: [{ id: 'tiktok:123', accountId: 'orgacc_a', platform: 'tiktok', platformVideoId: '123', viewCount: 0 }] }] };
+  const options = { campaignId, campaignInventory: async () => snapshot, refresh: async () => {}, deliver: async () => assert.fail('out of campaign alert sent'), channels: { viral: 'channel_1', growth: 'channel_2' }, minViews: 10000, minFollowers: 1000 };
+  await hooks.handleQueuedEvent({ payload: event() }, options);
+  await hooks.handleQueuedEvent({ payload: { ...event(), type: 'account.followers_milestone', timestamp: '2026-11-02T00:00:00Z', data: { account: event().data.account, observedAt: '2026-11-02T00:00:00Z', milestone: 1000, followerCount: 1100 } } }, options);
+  await hooks.handleQueuedEvent({ payload: event() }, { ...options, campaignInventory: async () => null });
+});

@@ -89,3 +89,92 @@ test('sync failures retain safe upstream HTTP status for actionable diagnostics 
   await assert.rejects(run(), error => error.message.includes('VIRAL_HTTP_401') && !error.message.includes('private credential'));
   assert.equal(failure, 'VIRAL_HTTP_401');
 });
+
+const campaignId = 'orgcamp_current';
+const campaignFixture = () => {
+  const creators = Array.from({ length: 4 }, (_, i) => ({ id: `creator_${i}`, user: { name: `Creator ${i}`, email: 'private@example.test' }, accounts: i ? [{ id: `account_${i}`, platform: 'tiktok', platformAccountId: `native_${i}`, username: `new_${i}`, isCompetitor: false }] : [], campaignDisplay: { id: campaignId, assignmentValidFrom: '2026-11-03T00:00:00Z', assignmentValidUntil: null } }));
+  const data = creators.map(c => ({ id: c.id, creatorId: c.id, campaign: { id: campaignId }, totalViews: 0, totalPosts: 0, totalVideosEligible: 0, totalLikes: 0, totalComments: 0, totalShares: 0, totalBookmarks: 0, engagementRate: 0 }));
+  return {
+    creators,
+    api: {
+      campaign: async () => ({ id: campaignId, name: 'Newest campaign', validFrom: '2026-11-01', validUntil: null, timeZone: 'UTC', creatorSummary: { activeCount: 4, activeCreators: creators } }),
+      campaignCreators: async () => creators,
+      campaignPerformance: async () => ({ data, totals: { rowCount: 4, totalViews: 0, totalPosts: 0, totalVideosEligible: 0, totalLikes: 0, totalComments: 0, totalShares: 0, totalBookmarks: 0 }, timeZone: 'UTC', eligibilityRefreshedAt: '2026-11-03T08:00:00Z' }),
+      campaignKpis: async () => ({ metrics: { totalViews: 0, publishedVideos: 0, eligibleVideos: 0 }, timeZone: 'UTC' }),
+      campaignVideos: async () => [],
+      accounts: async () => assert.fail('campaign must never read organization totals'),
+      videos: async () => assert.fail('campaign must never read organization videos'),
+    },
+  };
+};
+
+test('campaign ingestion retains all four zero-view creators, including one without accounts, and preserves organization storage', async () => {
+  assert.equal(typeof sync.createCampaignSynchronizer, 'function');
+  const { api } = campaignFixture();
+  let saved;
+  const run = sync.createSynchronizer({ campaignId, api, campaignInventory: async () => null, persistCampaign: async value => { saved = value; }, persist: async () => assert.fail('must not replace organization inventory'), failure: async () => {} });
+  const result = await run(new Date('2026-11-03T09:00:00Z'));
+  assert.equal(saved.campaign.id, campaignId);
+  assert.equal(saved.campaign.key, `campaign:${campaignId}`);
+  assert.equal(saved.creators.length, 4);
+  assert.equal(saved.creators[0].accounts.length, 0);
+  assert.equal(result.creators, 4);
+  assert.deepEqual(saved.periods.map(p => p.key), ['all','today','yesterday','week','month','previous_week','last30']);
+  assert.ok(saved.periods.every(p => p.creators.length === 4 && p.creators.every(c => c.viewCount === 0)));
+  assert.equal(JSON.stringify(saved).includes('private@example.test'), false);
+  assert.deepEqual(saved.events, []);
+});
+
+test('campaign missing metrics remain unknown and wrong-scope responses cannot replace a good snapshot', async () => {
+  const { api } = campaignFixture();
+  api.campaignPerformance = async () => ({ data: [], totals: {}, timeZone: 'UTC' });
+  api.campaignKpis = async () => ({ metrics: { totalViews: 10, eligibleVideos: 1, publishedVideos: 1 } });
+  let saved;
+  const run = sync.createCampaignSynchronizer({ campaignId, api, inventory: async () => null, persist: async value => { saved = value; }, failure: async () => {} });
+  await run(new Date('2026-11-03T09:00:00Z'));
+  assert.ok(saved.periods.every(p => p.creators.every(c => c.viewCount === null) && p.coverage.performanceComplete === false));
+  api.campaignPerformance = async () => ({ data: [{ id: 'old_assignment', creatorId: 'old_creator', campaign: { id: 'orgcamp_old' }, totalViews: 9000000 }], totals: {} });
+  saved = null;
+  await assert.rejects(run(), /sync failed/i);
+  assert.equal(saved, null);
+});
+
+test('campaign polling uses only verified campaign videos and distinct campaign event identities', async () => {
+  const { api } = campaignFixture();
+  const v = { ...video, orgAccountId: 'account_1', platformAccountId: 'native_1', viewCount: 9000000, viewCountInPeriod: 12000 };
+  api.campaignVideos = async () => [v];
+  let saved;
+  const run = sync.createCampaignSynchronizer({ campaignId, api, inventory: async () => ({ campaign: { id: campaignId }, periods: [{ key: 'all', videos: [{ ...sync.normalizeVideo(v), viewCount: 9000 }] }] }), persist: async value => { saved = value; }, failure: async () => {}, milestones: [10000] });
+  await run(new Date('2026-11-03T09:00:00Z'));
+  assert.equal(saved.events.length, 1);
+  assert.equal(saved.events[0].campaignId, campaignId);
+  assert.ok(saved.events[0].id.startsWith(`poll_campaign_${campaignId}_`));
+  assert.equal(saved.events[0].data.account.id, 'account_1');
+  assert.equal(saved.events[0].data.viewCount, 12000);
+  assert.equal(saved.periods[0].videos[0].viewCount, 12000);
+});
+
+test('campaign videos with nullable organization account ids resolve only through unique roster platform identity', async () => {
+  const { api } = campaignFixture();
+  api.campaignVideos = async () => [{ ...video, orgAccountId: null, platformAccountId: 'native_1', viewCountInPeriod: 0 }];
+  let saved;
+  const run = sync.createCampaignSynchronizer({ campaignId, api, inventory: async () => null, persist: async value => { saved = value; }, failure: async () => {} });
+  await run(new Date('2026-11-03T09:00:00Z'));
+  assert.equal(saved.periods[0].videos[0].accountId, 'account_1');
+  api.campaignVideos = async () => [{ ...video, orgAccountId: null, platformAccountId: 'unknown_account', viewCountInPeriod: 0 }];
+  await run(new Date('2026-11-03T10:00:00Z'));
+  assert.deepEqual(saved.periods[0].videos, []);
+  assert.equal(saved.periods[0].coverage.unverifiedVideos, 1);
+  assert.equal(saved.periods[0].totals.viewCount, 0);
+});
+
+test('empty campaign performance may prove four zero rows only with explicit empty source totals and KPIs', async () => {
+  const { api } = campaignFixture();
+  const performance = await api.campaignPerformance();
+  api.campaignPerformance = async () => ({ ...performance, data: [] });
+  let saved;
+  const run = sync.createCampaignSynchronizer({ campaignId, api, inventory: async () => null, persist: async value => { saved = value; }, failure: async () => {} });
+  await run(new Date('2026-11-03T09:00:00Z'));
+  assert.ok(saved.periods.every(period => period.creators.length === 4 && period.creators.every(creator => creator.viewCount === 0) && period.coverage.performanceComplete));
+  assert.ok(saved.creators.flatMap(creator => creator.accounts).every(account => account.followerCount === null));
+});

@@ -12,13 +12,23 @@ export function latinText(value) {
 const short = (value,max=1000) => latinText(value).slice(0,max);
 export const numberText = value => value == null || !Number.isFinite(Number(value)) ? 'Nema podatoci' : Math.round(Number(value)).toLocaleString('en-US');
 export const percentText = value => value == null || !Number.isFinite(Number(value)) ? 'Nema podatoci' : `${(Number(value)*100).toFixed(1)}%`;
-export const accountLabel = account => `@${short(account?.username || account?.accountUsername || 'nepoznat',45).replace(/^@/,'').replace(/([\\`*_~|>])/g,'\\$1')}`;
+export const accountLabel = account => {
+  const handle=account?.username || account?.accountUsername;
+  const name=handle?`@${String(handle).replace(/^@/,'')}`:account?.displayName || account?.name || 'Nepoznat kreator';
+  return short(name,46).replace(/([\\`*_~|>])/g,'\\$1');
+};
+export function creatorAliases(account) {
+  return [...new Set([account?.username,account?.accountUsername,account?.displayName,account?.name,...(account?.aliases || [])]
+    .filter(value=>typeof value==='string' && value.trim()).map(value=>latinText(value).trim().replace(/^@/,'').toLowerCase()))];
+}
 const field = (name,value,inline=false) => ({name:short(name,250),value:short(value || 'Nema podatoci',1024),inline});
 const base = (title,color=GREEN) => new EmbedBuilder().setTitle(short(title,256)).setColor(color).setFooter({text:'Footly • Viral.app'}).setTimestamp();
 export const periodText = snapshot => `${snapshot.period.from} - ${snapshot.period.to} (${snapshot.period.timezone})`;
+export const isCampaignUnstarted = snapshot => snapshot?.scope?.type==='campaign' && snapshot.accounts.length>0 && snapshot.videos.length===0 && snapshot.accounts.every(account=>account.viewCount===0 && account.videoCount===0);
 
 export function withCoverage(embed,snapshot) {
   const notes=snapshot.coverage?.notes || [];
+  if(snapshot.scope?.type==='campaign') embed.addFields(field('Kampanja',snapshot.scope.name));
   if(notes.length) embed.addFields(field('Opfat i ogranichuvanja',notes.join('\n')));
   if(snapshot.syncedAt) embed.setTimestamp(new Date(snapshot.syncedAt));
   return embed;
@@ -42,9 +52,11 @@ export function rankingEmbed(accounts,count,metricName,{snapshot,isPartial=false
   const metric=METRICS[metricName] || METRICS.nedela;
   const fieldName=snapshot?.period.key==='all' ? (metricName==='engagement'?'engagementRate':['nedela','mesec'].includes(metricName)?'viewCount':metric.field) : metric.field;
   const ranked=rankRows(accounts,fieldName);
-  const lines=ranked.map((account,index)=>`${index+1}. **${accountLabel(account)}** · ${short(account.platform,30)}\n${metricName==='engagement'?percentText(account[fieldName]):numberText(account[fieldName])} ${metricName==='engagement'?'':metric.unit}`);
+  const tiedAtZero=ranked.length>0 && ranked.every(account=>Number(account[fieldName])===0);
+  const lines=ranked.map((account,index)=>`${tiedAtZero?'•':`${index+1}.`} **${accountLabel(account)}**${account.platform?` · ${short(account.platform,30)}`:''}\n${metricName==='engagement'?percentText(account[fieldName]):numberText(account[fieldName])} ${metricName==='engagement'?'':metric.unit}`);
   const title=['nedela','mesec'].includes(metricName) && snapshot ? (snapshot.period.key==='all'?'Vkupno sledeni pregledi':'Pregledi vo izbraniot period') : metric.title;
-  const embed=base(`🏆 FOOTLY LEADERBOARD — ${title}`).setDescription(lines.join('\n\n') || 'Nema podatoci za ovoj period.');
+  const description=lines.join('\n\n') || 'Nema podatoci za ovoj period.';
+  const embed=base(`🏆 FOOTLY LEADERBOARD — ${title}`).setDescription(tiedAtZero?`Site prikazhani kreatori se izramneti na 0; se ushte nema lider.\n\n${description}`:description);
   embed.addFields(field('Opfat',`${accounts.length} od ${count} sledeni profili; rangirani se samo poznati vrednosti.`));
   if(snapshot) {embed.addFields(field('Period',periodText(snapshot)));withCoverage(embed,snapshot);}
   else if(isPartial) embed.addFields(field('Ogranichuvanje','Ovoj leaderboard sodrzhi delumni podatoci.'));
@@ -77,25 +89,27 @@ export function statisticsEmbed(snapshot) {
   return withCoverage(base('📊 Footly statistika',BLUE).setDescription(periodText(snapshot))
     .addFields(field('Vkupno sledeni pregledi',numberText(snapshot.totals.views),true),field('Novi pregledi',numberText(snapshot.totals.viewsGained),true),
       field('Novi objavi',numberText(snapshot.totals.posts),true),field('Sledeni kreatori',numberText(snapshot.accounts.length),true),
-      field('Sledeni videa',numberText(snapshot.videos.length),true)),snapshot);
+      field('Sledeni videa',numberText(snapshot.totals.videos ?? snapshot.videos.length),true)),snapshot);
 }
 
 export function reportEmbeds(snapshot,type='daily') {
   const weekly=type==='weekly';
-  const embed=statisticsEmbed(snapshot).setTitle(weekly?'📊 FOOTLY — Nedelen izvestaj':'📊 FOOTLY — Dneven izvestaj');
-  const topCreators=rankRows(snapshot.accounts,'viewCountInPeriod',weekly?10:3);
-  const leader=topCreators[0];
+  const unstarted=isCampaignUnstarted(snapshot);
+  const embed=statisticsEmbed(snapshot).setTitle(type==='campaign'?'📊 FOOTLY — Tekovna sostojba na kampanjata':weekly?'📊 FOOTLY — Nedelen izvestaj':'📊 FOOTLY — Dneven izvestaj');
+  const creatorMetric=snapshot.period.key==='all'?'viewCount':'viewCountInPeriod';
+  const topCreators=rankRows(snapshot.accounts,creatorMetric,weekly || unstarted ?10:3);
+  const leader=topCreators[0]?.[creatorMetric]>0 ? topCreators[0] : null;
   const growth=rankRows(snapshot.accounts,'followerGrowth',3).filter(account=>account.followerGrowth>0);
   const engagement=rankRows(snapshot.accounts,'engagementRateInPeriod',3);
   const underperforming=snapshot.accounts.filter(account=>account.viewCountInPeriod!=null && account.videoCountInPeriod!=null)
     .sort((a,b)=>a.viewCountInPeriod-b.viewCountInPeriod).slice(0,3);
   const milestones=(snapshot.milestones || []).slice(0,4).map(event=>`${accountLabel(event.data?.account)}: ${numberText(event.data?.milestone)} pregledi`);
-  embed.addFields(field('Najdobri kreatori',topCreators.map((account,index)=>`${index+1}. ${accountLabel(account)} — ${numberText(account.viewCountInPeriod)} pregledi`).join('\n')),
+  embed.addFields(field(unstarted?'Uchesnici — site se izramneti':'Najdobri kreatori',topCreators.map((account,index)=>`${unstarted?'•':`${index+1}.`} ${accountLabel(account)} — ${numberText(account[creatorMetric])} pregledi`).join('\n')),
     field('Izmeren rast na sledbenici',growth.length ? growth.map(account=>`${accountLabel(account)} +${numberText(account.followerGrowth)}`).join('\n') : 'Nema podatoci za potvrden rast.'),
     field('Milestones vo periodot',milestones.length?milestones.join('\n'):'Nema zabelezhani novi milestones.'),
     field('Engagement',engagement.map(account=>`${accountLabel(account)} ${percentText(account.engagementRateInPeriod)}`).join('\n') || 'Nema podatoci.'));
-  if(weekly) embed.addFields(field('Profili za proverka',underperforming.map(account=>`${accountLabel(account)}: ${numberText(account.viewCountInPeriod)} novi pregledi, ${numberText(account.videoCountInPeriod)} objavi`).join('\n') || 'Nema podatoci za sporedba.'));
-  embed.addFields(field('Preporaki',leader ? `Pregledajte go formatot na ${accountLabel(leader)} i testirajte slichni idei. Proverete go opfatot pred odluka za nagradi. Ova se preporaki, ne potvrdeni prichini za rast.` : 'Soberete celosen period so podatoci pred sporedba na kreatorite.'));
+  if(weekly && !unstarted) embed.addFields(field('Profili za proverka',underperforming.map(account=>`${accountLabel(account)}: ${numberText(account.viewCountInPeriod)} novi pregledi, ${numberText(account.videoCountInPeriod)} objavi`).join('\n') || 'Nema podatoci za sporedba.'));
+  embed.addFields(field('Preporaki',unstarted?'Pochekajte gi prvite objavi vo kampanjata. Site kreatori se izramneti; se ushte nema osnova za izbor na pobednik ili nagradi.':leader ? `Pregledajte go formatot na ${accountLabel(leader)} i testirajte slichni idei. Proverete go opfatot pred odluka za nagradi. Ova se preporaki, ne potvrdeni prichini za rast.` : 'Soberete celosen period so podatoci pred sporedba na kreatorite.'));
   const videoEmbed=videosEmbed(snapshot,'period',weekly?10:1);
   videoEmbed.data.fields = (videoEmbed.data.fields || []).filter(item=>item.name!=='Opfat i ogranichuvanja');
   const size=data=>(data.title?.length||0)+(data.description?.length||0)+(data.footer?.text.length||0)+(data.fields||[]).reduce((sum,item)=>sum+item.name.length+item.value.length,0);

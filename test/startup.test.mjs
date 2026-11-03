@@ -25,6 +25,6 @@ test('missing configuration leaves HTTP alive, safely unready, and shuts down cl
 test('database migrates even while external credentials are pending', {skip:!process.env.TEST_DATABASE_URL},async()=>{
  const admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});const schema=`runtime_${randomUUID().replaceAll('-','')}`;await admin.query(`CREATE SCHEMA ${schema}`);
  const url=new URL(process.env.TEST_DATABASE_URL);url.searchParams.set('options',`-c search_path=${schema}`);const runtime=await launch(url.toString());
- try{await until(async()=>{const r=await runtime.request('/ready');return (await r.json()).database===true;},runtime);const status=await (await runtime.request('/ready')).json();assert.equal(status.ready,false);assert.equal(status.discord,false);assert.equal((await admin.query(`SELECT count(*) AS n FROM ${schema}.schema_migrations`)).rows[0].n,'2');}
+ try{await until(async()=>{const r=await runtime.request('/ready');return (await r.json()).database===true;},runtime);const status=await (await runtime.request('/ready')).json();assert.equal(status.ready,false);assert.equal(status.discord,false);assert.equal((await admin.query(`SELECT count(*) AS n FROM ${schema}.schema_migrations`)).rows[0].n,'3');}
  finally{runtime.child.kill('SIGTERM');await runtime.exit;await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();}
 });

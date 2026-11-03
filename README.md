@@ -2,6 +2,8 @@
 
 A Node.js 24 Discord bot for the existing Footly creator community. It stores real Viral.app analytics in PostgreSQL and publishes Macedonian Latin-script leaderboards, milestone alerts, daily/weekly reports, and data-grounded growth answers.
 
+Production uses the selected **Clipping Kampanja 5 Seriozni** campaign. Its roster remains visible even before the first campaign video or view. All bot analytics and output are scoped to that campaign through `VIRAL_CAMPAIGN_ID`.
+
 ## Architecture
 
 - `src/index.js`: HTTP-first startup, dependency recovery, Discord registration, readiness, synchronization and schedules.
@@ -45,6 +47,7 @@ The full template is `.env.example`. Enter production secrets directly in Railwa
 | `CHANNEL_NEW_VIDEOS` | Optional; omitted means no new-video posts |
 | `VIRAL_WEBHOOK_SECRET` | Exact generated endpoint signing secret; optional when using polling only |
 | `VIRAL_ORG_ID` | Optional additional incoming organization-ID check |
+| `VIRAL_CAMPAIGN_ID` | Pin a campaign (`orgcamp_…`); all analytics use its official eligible campaign data with no organization fallback |
 | `OPENAI_API_KEY` | Optional; analytics answers remain available without it |
 | `OPENAI_MODEL` | Supported Responses model; default `gpt-4.1-mini` |
 | `PORT` | HTTP listener, default `3000` |
@@ -84,6 +87,12 @@ Launch verification covered configured schedules, automated scheduling tests, re
 
 ## Viral.app and data meaning
 
+With `VIRAL_CAMPAIGN_ID`, the bot reads the campaign and creator roster plus the official `/creator-hub/overview` performance, KPI and video endpoints. Campaign assignment and eligibility rules are applied by Viral.app. Performance pagination includes every participant; explicit zero values appear in leaderboards. Failed or missing metrics remain unknown. Campaign snapshots preserve the original organization data separately, and pending organization deliveries are excluded from campaign recovery. The existing leaderboard message is edited in place; one current campaign summary is posted after its first successful synchronization.
+
+The campaign video endpoint returns up to 300 videos. Rankings and alert eligibility are limited to the returned campaign video set and labeled accordingly; creator totals come from the paginated performance dataset. A video absent from that eligible set cannot trigger a campaign alert. Period boundaries follow the provider's reported timezone, with differences from Skopje disclosed. A newly configured campaign never falls back to old organization totals while synchronization is pending.
+
+When no campaign is configured, organization mode works as follows:
+
 Integration uses the [official API reference](https://viral.app/api/v1/docs) and [webhook guide](https://viral.app/docs/brands/api/webhooks). Inventory uses `/accounts` and `/videos`, checks every page against source totals, and never replaces good data after an incomplete fetch. Creator period metrics use filtered batches of up to 100 IDs, requesting every tracked account; unavailable period metrics remain explicitly unknown. Competitor accounts/videos are excluded.
 
 Register this production endpoint:
@@ -114,7 +123,7 @@ Data limitations are shown in Discord:
 
 ## AI grounding
 
-The bot calculates facts locally from persisted analytics. OpenAI Responses receives a small computed context and selects one or two approved recommendation IDs using a strict JSON schema. The application renders all facts and recommendation text, so model output cannot introduce invented statistics or causes. `store:false` is set; no credentials or creator contact details enter the context. Provider failures preserve measured facts and a deterministic recommendation. A per-user cooldown limits repeated requests.
+The bot calculates facts locally from persisted analytics. OpenAI Responses receives a small computed context and selects one or two approved recommendation IDs using a strict JSON schema. The application renders all facts and recommendation text, so model output cannot introduce invented statistics or causes. `store:false` is set; no credentials or creator contact details enter the context. Provider failures preserve measured facts and a deterministic recommendation. A per-user cooldown limits repeated requests. With zero campaign activity, answers list the tied participants and first-post guidance without declaring a winner or calling the AI provider unnecessarily.
 
 Success logs `[ai] Recommendation selection validated`; fallback logs only a safe HTTP status or generic code. `/ready` deliberately does not depend on this optional provider. AI behavior should be separately checked with a controlled `/prasaj` request.
 

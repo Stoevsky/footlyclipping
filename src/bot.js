@@ -1,153 +1,177 @@
 import { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, PermissionFlagsBits, REST, Routes } from 'discord.js';
 import { config } from './config.js';
 import { getState, setState, pool } from './db.js';
-import { topAccounts, trackedCount, clearCache } from './viral.js';
-import { METRICS, rankingEmbed, dailyEmbed } from './presentation.js';
+import { getAnalytics } from './analytics.js';
+import { localDate } from './utils.js';
+import { METRICS, rankingEmbed, videosEmbed, creatorEmbed, statisticsEmbed, reportEmbeds, latinText } from './presentation.js';
 import { answerQuestion } from './ai.js';
+import { deliverOnce, guildChannel } from './delivery.js';
 
-export const bot = new Client({ intents: [GatewayIntentBits.Guilds] });
-const lastAIRequest = new Map();
-let lastLeaderboardRun = 0;
-let leaderboardUpdating = false;
+export const bot = new Client({intents:[GatewayIntentBits.Guilds]});
+const lastAIRequest=new Map();
+let lastLeaderboardRun=0, leaderboardUpdating=false;
+const PERIOD_CHOICES=[{name:'Denes',value:'today'},{name:'Vchera',value:'yesterday'},{name:'Ovaa nedela',value:'week'},
+  {name:'Minatata nedela',value:'previous_week'},{name:'Ovoj mesec',value:'month'},{name:'Poslednite 30 dena',value:'last30'},{name:'Vkupno',value:'all'}];
+const withPeriod=command=>command.addStringOption(option=>option.setName('period').setDescription('Izberi period za izvestajot').addChoices(...PERIOD_CHOICES));
+const withMetric=command=>command.addStringOption(option=>option.setName('metrika').setDescription('Kako da gi rangirame kreatorite?')
+  .addChoices(...Object.entries(METRICS).map(([value,meta])=>({name:meta.title,value}))));
 
-export const commands = [
-  new SlashCommandBuilder().setName('top').setDescription('Footly leaderboard od Viral.app')
-    .addStringOption(option => option.setName('metrika').setDescription('Kako da gi rangirame profilite?').setRequired(true)
-      .addChoices(
-        { name: 'Novi pregledi - 7 dena', value: 'nedela' },
-        { name: 'Novi pregledi - 30 dena', value: 'mesec' },
-        { name: 'Vkupno pregledi', value: 'vkupno' },
-        { name: 'Najmnogu sledbenici', value: 'sledbenici' },
-        { name: 'Najmnogu novi objavi', value: 'objavi' },
-        { name: 'Najdobar engagement', value: 'engagement' },
-      )),
-  new SlashCommandBuilder().setName('izvestaj').setDescription('Prikazhi izvestaj za vcherashniot den'),
-  new SlashCommandBuilder().setName('prasaj').setDescription('Prashaj go Footly Growth AI za Viral.app statistikata')
-    .addStringOption(option => option.setName('prashanje').setDescription('Shto sakash da znaesh?').setRequired(true).setMaxLength(500)),
+export const commands=[
+  withPeriod(withMetric(new SlashCommandBuilder().setName('leaderboard').setDescription('Eve gi najdobrite Footly kreatori'))),
+  withPeriod(withMetric(new SlashCommandBuilder().setName('top').setDescription('Footly leaderboard'))),
+  withPeriod(new SlashCommandBuilder().setName('topvideos').setDescription('Najviralni videa od sledeni kreatori')
+    .addStringOption(option=>option.setName('metrika').setDescription('Pregledi za rangiranje').addChoices({name:'Vkupno pregledi',value:'vkupno'},{name:'Novi pregledi vo periodot',value:'period'}))),
+  withPeriod(new SlashCommandBuilder().setName('kreator').setDescription('Statistika za odreden kreator')
+    .addStringOption(option=>option.setName('username').setDescription('Korisnichko ime na kreatorot').setRequired(true).setMaxLength(100))
+    .addStringOption(option=>option.setName('platforma').setDescription('Platforma, ako kreatorot ima povekje profili').setMaxLength(30))),
+  withPeriod(new SlashCommandBuilder().setName('statistika').setDescription('Vkupna Footly analitika i opfat')),
+  new SlashCommandBuilder().setName('izvestaj').setDescription('Pregled na dnevniot ili nedelniot izvestaj')
+    .addStringOption(option=>option.setName('tip').setDescription('Tip na izvestaj').addChoices({name:'Dneven',value:'daily'},{name:'Nedelen',value:'weekly'})),
+  new SlashCommandBuilder().setName('prasaj').setDescription('Prashaj go Footly Growth AI za kreatorite')
+    .addStringOption(option=>option.setName('prashanje').setDescription('Shto sakash da znaesh?').setRequired(true).setMaxLength(500)),
   new SlashCommandBuilder().setName('status').setDescription('Proveri go statusot na botot'),
-  new SlashCommandBuilder().setName('osvezi').setDescription('Rachno osvezhi go glavniot leaderboard')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-  new SlashCommandBuilder().setName('test').setDescription('Testiraj go botot bez javni notifikacii')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('osvezi').setDescription('Sinhroniziraj i osvezhi go leaderboardot').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('test').setDescription('Privatna proverka na botot').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
 
 export async function registerCommands() {
-  const rest = new REST({ version: '10' }).setToken(config.token);
-  await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), { body: commands.map(c => c.toJSON()) });
-  console.info('[discord] Komandite se registrirani.');
+  await new REST({version:'10'}).setToken(config.token).put(Routes.applicationGuildCommands(config.clientId,config.guildId),{body:commands.map(command=>command.toJSON())});
+  console.info('[discord] Guild commands registered');
 }
 
-export async function sendToChannel(channelId, embeds) {
-  if (!channelId) return null;
-  const channel = await bot.channels.fetch(channelId);
-  if (!channel?.isTextBased() || typeof channel.send !== 'function') throw new Error(`Nevaliden Discord kanal: ${channelId}`);
-  return channel.send({ embeds: Array.isArray(embeds) ? embeds : [embeds], allowedMentions: { parse: [] } });
+export async function sendToChannel(channelId,embeds) {
+  const channel=await guildChannel(bot,channelId,config.guildId);
+  return channel.send({embeds:Array.isArray(embeds)?embeds:[embeds],allowedMentions:{parse:[]}});
 }
 
-function metricConfig(metricName) { return METRICS[metricName] || METRICS.nedela; }
-async function metricData(metricName) {
-  const meta = metricConfig(metricName);
-  const [accounts, count] = await Promise.all([topAccounts({ days: meta.days, metric: meta.api }), trackedCount()]);
-  return { accounts, count, isPartial: count > 100 };
-}
-
-export async function updateLeaderboard(force = false) {
-  if (!config.channels.leaderboard || leaderboardUpdating || !bot.isReady()) return false;
-  if (!force && Date.now() - lastLeaderboardRun < 10 * 60 * 1000) return false;
-  leaderboardUpdating = true;
+export async function updateLeaderboard(force=false) {
+  if(!config.channels.leaderboard || leaderboardUpdating || !bot.isReady()) return false;
+  if(!force && Date.now()-lastLeaderboardRun<10*60*1000) return false;
+  leaderboardUpdating=true;
   try {
-    if (force) clearCache();
-    const { accounts, count, isPartial } = await metricData('nedela');
-    const embed = rankingEmbed(accounts, count, 'nedela', { isPartial });
-    const channel = await bot.channels.fetch(config.channels.leaderboard);
-    if (!channel?.isTextBased() || typeof channel.send !== 'function') throw new Error('Leaderboard kanalot e nevaliden.');
-    const lastMessageId = await getState('leaderboard_message');
+    const snapshot=await getAnalytics({period:'week'});
+    if(!snapshot.syncedAt) return false;
+    const embed=rankingEmbed(snapshot.accounts,snapshot.accounts.length,'nedela',{snapshot});
+    const channel=await guildChannel(bot,config.channels.leaderboard,config.guildId);
+    const previous=await getState('leaderboard_message');
     let message;
-    if (lastMessageId) {
+    if(previous) {
       try {
-        message = await channel.messages.fetch(lastMessageId);
-        await message.edit({ embeds: [embed], allowedMentions: { parse: [] } });
-      } catch (error) {
-        // Ako porakata e izbrishana, se kreira nova. Inaku prijavi ja greshkata.
-        if (error.code !== 10008) throw error;
-      }
+        message=await channel.messages.fetch(previous);
+        if(message.author.id!==bot.user.id) throw new Error('Leaderboard message is not owned by this bot');
+        await message.edit({embeds:[embed],allowedMentions:{parse:[]}});
+      } catch(error) {if(error.code!==10008) throw error;message=undefined;}
     }
-    if (!message) {
-      message = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
-      await setState('leaderboard_message', message.id);
+    if(!message) {
+      const id=await deliverOnce(`leaderboard:${config.channels.leaderboard}:${previous || 'initial'}`,config.channels.leaderboard,embed);
+      await setState('leaderboard_message',id);
     }
-    lastLeaderboardRun = Date.now();
-    await setState('last_leaderboard_update', new Date().toISOString());
+    lastLeaderboardRun=Date.now();
+    await setState('last_leaderboard_update',new Date().toISOString());
     return true;
-  } finally { leaderboardUpdating = false; }
+  } finally {leaderboardUpdating=false;}
 }
 
-export async function buildDailyReport() {
-  const [accounts, count] = await Promise.all([
-    topAccounts({ days: 1, metric: 'viewCountInPeriod', yesterday: true }), trackedCount(),
-  ]);
-  return dailyEmbed(accounts, count, count > 100);
+export async function buildDailyReport() { return reportEmbeds(await getAnalytics({period:'yesterday'}),'daily'); }
+export async function buildWeeklyReport() { return reportEmbeds(await getAnalytics({period:'previous_week'}),'weekly'); }
+
+export function reportIsDue(type,now=new Date(),timezone=config.timezone,schedule=type==='weekly'?config.weeklyReportCron:config.reportCron) {
+  const match=/^(\d{1,2}) (\d{1,2}) \* \* (\*|1)$/.exec(schedule);
+  if(!match || Number(match[1])>59 || Number(match[2])>23) return false;
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:timezone,hourCycle:'h23',hour:'2-digit',minute:'2-digit',weekday:'short'}).formatToParts(now).map(part=>[part.type,part.value]));
+  const timeDue=Number(parts.hour)*60+Number(parts.minute)>=Number(match[2])*60+Number(match[1]);
+  return type==='weekly' ? parts.weekday!=='Mon' || timeDue : timeDue;
 }
 
-export async function postDailyReport() {
-  if (!config.channels.daily) return false;
-  const key = `daily:${new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}`;
-  // Edna bot instanca. Unique key sprechuva dupla objava pri restart.
-  const claim = await pool.query('INSERT INTO sent_reports(report_key) VALUES($1) ON CONFLICT DO NOTHING RETURNING report_key', [key]);
-  if (!claim.rowCount) return false;
-  try {
-    await sendToChannel(config.channels.daily, await buildDailyReport());
-    return true;
-  } catch (err) {
-    await pool.query('DELETE FROM sent_reports WHERE report_key=$1', [key]);
-    throw err;
+export async function postScheduledReport(type,options={}) {
+  const now=options.now || new Date(), c=options.configuration || config;
+  const ready=options.isReady || (()=>bot.isReady());
+  const channelId=type==='weekly' ? c.channels.weekly || c.channels.daily : c.channels.daily;
+  if(!channelId || !ready() || !reportIsDue(type,now,c.timezone,type==='weekly'?c.weeklyReportCron:c.reportCron)) return false;
+  const snapshot=await (options.getAnalytics || getAnalytics)({period:type==='weekly'?'previous_week':'yesterday',now,timezone:c.timezone});
+  if(!snapshot.syncedAt || !Number.isFinite(Date.parse(snapshot.coverage.periodObservedAt)) || new Date(snapshot.syncedAt)<new Date(snapshot.period.end) || !snapshot.coverage.periodAvailable ||
+    new Date(snapshot.coverage.periodObservedAt)<new Date(snapshot.period.end)) return false;
+  if(snapshot.accounts.length && !snapshot.accounts.some(account=>account.viewCountInPeriod!=null)) return false;
+  const database=options.database || pool;
+  // Preserve v1's report claim to avoid repeating a report during an upgrade.
+  if(type==='daily') {
+    const legacy=await database.query('SELECT report_key FROM sent_reports WHERE report_key=$1',[`daily:${localDate(now,c.timezone)}`]);
+    if(legacy.rowCount) return false;
   }
+  const key=`report:${type}:${snapshot.period.from}:${snapshot.period.to}`;
+  await (options.deliverOnce || deliverOnce)(key,channelId,reportEmbeds(snapshot,type));
+  return true;
 }
+export async function postDailyReport(options) { return postScheduledReport('daily',options); }
+export async function postWeeklyReport(options) { return postScheduledReport('weekly',options); }
 
-bot.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand() || interaction.guildId !== config.guildId) return;
+const replyPayload=embeds=>({embeds:Array.isArray(embeds)?embeds:[embeds],allowedMentions:{parse:[]}});
+export async function handleInteraction(interaction,dependencies={}) {
+  const guildId=dependencies.guildId || config.guildId;
+  if(!interaction.isChatInputCommand() || interaction.guildId!==guildId) return;
+  const load=dependencies.getAnalytics || getAnalytics;
+  const name=interaction.commandName;
   try {
-    if (interaction.commandName === 'top') {
-      await interaction.deferReply();
-      const metric = interaction.options.getString('metrika', true);
-      const { accounts, count, isPartial } = await metricData(metric);
-      await interaction.editReply({ embeds: [rankingEmbed(accounts, count, metric, { isPartial })], allowedMentions: { parse: [] } });
-    } else if (interaction.commandName === 'izvestaj') {
-      await interaction.deferReply();
-      await interaction.editReply({ embeds: [await buildDailyReport()] });
-    } else if (interaction.commandName === 'prasaj') {
-      if (config.channels.ai && interaction.channelId !== config.channels.ai) {
-        await interaction.reply({ content: 'Koristi ja ovaa komanda vo #footly-ai kanalot.', ephemeral: true });
-        return;
-      }
-      const now = Date.now();
-      if (now - (lastAIRequest.get(interaction.user.id) || 0) < 30000) {
-        await interaction.reply({ content: 'Probaj povtorno za 30 sekundi.', ephemeral: true });
-        return;
-      }
-      lastAIRequest.set(interaction.user.id, now);
-      await interaction.deferReply();
-      const answer = await answerQuestion(interaction.options.getString('prashanje', true));
-      await interaction.editReply({ content: `🤖 **Footly Growth AI**\n${answer}`, allowedMentions: { parse: [] } });
-    } else if (interaction.commandName === 'status') {
-      const { rows } = await pool.query("SELECT count(*)::integer AS pending FROM viral_events WHERE status='pending'");
-      const last = await getState('last_leaderboard_update');
-      await interaction.reply({ content: `✅ Botot e online.\n📥 Webhook eventi vo redica: **${rows[0].pending}**\n🏆 Posledno osvezhuvanje: **${last || 'nema'}**`, ephemeral: true });
-    } else if (interaction.commandName === 'osvezi') {
-      await interaction.deferReply({ ephemeral: true });
-      const updated = await updateLeaderboard(true);
-      await interaction.editReply(updated ? '✅ Leaderboard e osvezhen!' : '⚠️ Leaderboard ne mozhe da se osvezhi vo momentov.');
-    } else if (interaction.commandName === 'test') {
-      const testEmbed = new EmbedBuilder().setColor(0x34db83).setTitle('✅ Footly Growth Bot raboti!')
-        .setDescription('Ova e privatna test poraka. Ne e ispratena na kanalite.');
-      await interaction.reply({ embeds: [testEmbed], ephemeral: true });
+    if(['osvezi','test'].includes(name) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      await interaction.reply({content:'Za ovaa komanda ti treba dozvola Manage Server.',ephemeral:true});return;
     }
-  } catch (err) {
-    console.error('[discord] command error', err);
-    const message = `⚠️ Nastana greshka. ${String(err.message || '').slice(0, 160)}`;
+    if(name==='test') {
+      await interaction.reply({...replyPayload(new EmbedBuilder().setColor(0x34db83).setTitle('✅ Footly botot raboti!').setDescription('Ova e privatna proverka.')),ephemeral:true});return;
+    }
+    if(name==='prasaj') {
+      if(config.channels.ai && interaction.channelId!==config.channels.ai) {
+        await interaction.reply({content:`Koristi ja ovaa komanda vo <#${config.channels.ai}>.`,ephemeral:true,allowedMentions:{parse:[]}});return;
+      }
+      const now=Date.now();
+      for(const [id,time] of lastAIRequest) if(now-time>60000) lastAIRequest.delete(id);
+      if(now-(lastAIRequest.get(interaction.user.id) || 0)<30000) {
+        await interaction.reply({content:'Probaj povtorno za 30 sekundi.',ephemeral:true});return;
+      }
+      lastAIRequest.set(interaction.user.id,now);
+      await interaction.deferReply();
+      const answer=await (dependencies.answerQuestion || answerQuestion)(interaction.options.getString('prashanje',true));
+      await interaction.editReply({content:`🤖 **Footly Growth AI**\n${latinText(answer).slice(0,1950)}`,allowedMentions:{parse:[]}});return;
+    }
+    if(name==='osvezi') {
+      await interaction.deferReply({ephemeral:true});
+      const sync=dependencies.syncAnalytics || (await import('./sync.js')).syncAnalytics;
+      await sync();
+      const updated=await (dependencies.updateLeaderboard || updateLeaderboard)(true);
+      await interaction.editReply({content:updated?'✅ Podatocite i leaderboardot se osvezheni!':'Podatocite se obrabotuvaat. Probaj povtorno podocna.'});return;
+    }
+    if(name==='status') {
+      await interaction.deferReply({ephemeral:true});
+      const snapshot=await load({period:'week'});
+      const {rows}=await pool.query("SELECT count(*)::integer AS pending FROM viral_events WHERE status IN ('pending','processing')");
+      const timestamp=snapshot.syncedAt ? new Intl.DateTimeFormat('en-GB',{timeZone:config.timezone,dateStyle:'short',timeStyle:'short'}).format(new Date(snapshot.syncedAt)) : 'nema';
+      await interaction.editReply({content:`✅ Botot e online.\nNastani vo redica: **${rows[0].pending}**\nPosledna sinhronizacija: **${timestamp}** (${config.timezone}).`});return;
+    }
+    await interaction.deferReply();
+    if(name==='izvestaj') {
+      const type=interaction.options.getString('tip') || 'daily';
+      await interaction.editReply(replyPayload(reportEmbeds(await load({period:type==='weekly'?'previous_week':'yesterday'}),type)));return;
+    }
+    const metric=interaction.options.getString('metrika') || 'nedela';
+    const period=interaction.options.getString('period') || (name==='topvideos'?(metric==='period'?'week':'all'):METRICS[metric]?.period || 'week');
+    const snapshot=await load({period});
+    if(['leaderboard','top'].includes(name)) await interaction.editReply(replyPayload(rankingEmbed(snapshot.accounts,snapshot.accounts.length,metric,{snapshot})));
+    else if(name==='topvideos') await interaction.editReply(replyPayload(videosEmbed(snapshot,interaction.options.getString('metrika') || 'vkupno')));
+    else if(name==='statistika') await interaction.editReply(replyPayload(statisticsEmbed(snapshot)));
+    else if(name==='kreator') {
+      const username=interaction.options.getString('username',true).replace(/^@/,'').toLowerCase();
+      const platform=interaction.options.getString('platforma')?.toLowerCase();
+      const matches=snapshot.accounts.filter(account=>String(account.username).toLowerCase()===username && (!platform || String(account.platform).toLowerCase()===platform));
+      if(matches.length>1) await interaction.editReply({content:'Najdov povekje profili. Dodadi platforma za tochniot kreator.',allowedMentions:{parse:[]}});
+      else if(matches.length) await interaction.editReply(replyPayload(creatorEmbed(matches[0],snapshot)));
+      else await interaction.editReply({content:'Nema sleden kreator so toa korisnichko ime.',allowedMentions:{parse:[]}});
+    } else await interaction.editReply({content:'Ovaa komanda ne e dostapna.'});
+  } catch(error) {
+    console.error('[discord] Command failed',/^\d+$/.test(String(error.code || '')) ? error.code : 'COMMAND_FAILED');
+    const payload={content:'⚠️ Podatocite momentalno ne se dostapni. Probaj povtorno podocna.',embeds:[],allowedMentions:{parse:[]}};
     try {
-      if (interaction.deferred || interaction.replied) await interaction.editReply({ content: message, embeds: [] });
-      else await interaction.reply({ content: message, ephemeral: true });
-    } catch { /* interaction mozhe da isteche */ }
+      if(interaction.deferred || interaction.replied) await interaction.editReply(payload);
+      else await interaction.reply({...payload,ephemeral:true});
+    } catch { /* The interaction may have expired; never leak provider errors. */ }
   }
-});
+}
+bot.on('interactionCreate',interaction=>{void handleInteraction(interaction);});

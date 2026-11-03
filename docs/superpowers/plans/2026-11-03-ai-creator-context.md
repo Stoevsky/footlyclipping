@@ -9,4 +9,5 @@ The user's follow-up expands AI answers to OpenAI-generated responses using Foot
 - [x] Implement full OpenAI responses for all questions, including zero-activity campaigns, with validated fact references and readable fallback.
 - [x] Add `/prashaj` alias, retain `/prasaj`, authorized-guild/channel guards and cooldown, and use a bounded embed for longer creative answers.
 - [x] Test context separation, privacy, fact validation, provider errors, zero activity, slideshow output and alias behavior; run the complete PostgreSQL-backed suite.
-- [ ] Push and deploy; verify a real OpenAI answer in Discord while the leaderboard still shows only the campaign's four creators.
+- [x] Push and deploy; verify a real OpenAI answer in Discord while the leaderboard still shows only the campaign's four creators.
+- [x] Apply the user's final message preference: no provider branding, useful statistics only, and an awaiting-first-posts roster instead of repeated zeros.

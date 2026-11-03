@@ -74,3 +74,15 @@ The user's subsequent AI request authorizes broader organization context for `/p
 ## Manual code releases
 
 When Railway's GitHub auto deploy is unavailable, staging a non-secret `RELEASE_REVISION` variable with the intended commit SHA and deploying the staged change pulls the latest connected `main` source. Always verify the resulting GitHub source SHA in deployment Details; the marker is only an operator label, not source verification. Keep credential variables collapsed while inspecting deployments.
+
+## Conversational AI verification — 2026-11-03, 17:17 Skopje
+
+Deployed source `ef61230c3119a81e77d76b3a9d5383ae78428cca` as Railway deployment `f31b9081-a556-4788-ade5-e965d2638dbe`. Details showed Deployment successful and the exact GitHub source SHA. `/ready` returned HTTP 200 with configuration, analytics, database, Discord and jobs true.
+
+The initial expanded AI call reached OpenAI but failed the measured-number guard. Safe diagnostics identified `AI_MEASURED_NUMBER_GUARD` after about seven seconds, rather than a credential, timeout or token-limit failure. Regression tests reproduced numbered-list false positives; the guard now distinguishes list numbering from measured statistics. A single corrective retry handles invalid numeric prose or nonexistent fact references, with a safe fallback if validation still fails.
+
+At 17:17:45 the production log recorded `[ai] OpenAI conversational response validated`. The actual `/prashaj` response contained five original Footly slides, a visual suggestion for each, caption and CTA. It contained neither provider branding nor an empty statistics block. The user-facing response is Discord message `1567211169373093958` in the configured AI channel. `/prasaj` remains an alias of the same handler.
+
+The independent AI context refresh loaded 27 organization accounts and 291 videos. The campaign leaderboard remained limited to four creators (five connected accounts), including both current handles for Lazar. Its existing message was updated in place to list the roster and await first posts, without repeated zeros or provider branding. New inactive-campaign reports use the same concise roster format; earlier historical reports were retained.
+
+The final implementation passed 130 PostgreSQL-backed tests with zero skips, dependency audit with zero vulnerabilities, diff checks and a credential-pattern scan of 49 project files. Private creator-guide notes remain runtime configuration, not repository contents. The AI has summarized guide knowledge and selected analytics context; it does not claim to have viewed linked media that has not been loaded.

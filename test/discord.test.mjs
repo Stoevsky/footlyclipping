@@ -180,7 +180,7 @@ test('zero campaign AI fallback omits zero-stat blocks and avoids fabricated win
   let calls=0;
   const answer=await ai.answerQuestion('Koj kreator treba da go nagradime?',{getAnalytics:async()=>zeroCampaign,apiKey:'test',fetch:async()=>{calls++;throw new Error('not needed');}});
   assert.doesNotMatch(answer,/izramneti|0 pregledi|0 objavi/i);
-  assert.match(answer,/prvite objavi/);
+  assert.doesNotMatch(answer,/prvite objavi|pobednik/);
   assert.doesNotMatch(answer,/Pregledajte gi najdobrite objavi/);
   assert.equal(calls,1);
 });

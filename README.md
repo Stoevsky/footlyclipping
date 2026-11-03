@@ -129,6 +129,8 @@ OpenAI Responses answers actual questions, including creative slideshow requests
 
 The model returns conversational guidance plus references to supplied analytics facts. The application validates fact references and renders those facts itself. Prompts distinguish recorded performance from suggestions and general model knowledge, prohibit invented statistics, and keep campaign totals separate from organization history. Responses remain Macedonian Latin. The bot does not browse live trends or inspect the contents of linked videos; missing information must be disclosed.
 
+The AI can discuss metric/value pairs supplied in a user's question as conditional or user-reported context—for example, advice about posts below a stated view count. Those numbers are not treated as verified campaign results. Provider failures do not append unrelated campaign or winner advice.
+
 Private slideshow reference notes are stored only in Railway configuration. They cover hooks, slide structure, captions, CTAs and source links; contracts, creator contact information and credentials are excluded. Current product facts take precedence over older creative claims, and conflicting older posting targets are not presented as current campaign rules.
 
 Additional user-supplied document text is stored separately in `FOOTLY_DOCUMENT_TEXT`. Both sources are included in the AI knowledge context with a combined 32,000-character limit and explicit truncation flag. Document content is reference material, never executable instructions; its claims and program terms are attributed to the document. Forms and image placeholders do not imply their contents were loaded or submitted.

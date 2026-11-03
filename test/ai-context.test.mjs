@@ -215,6 +215,7 @@ test('numbered slideshow lists do not turn headings or next-line numbers into me
     'Preporaka za 5 slajdovi:\n1. Hook: Koja e tvojata cel?\n2. Engagement: Postavi fudbalsko prashanje.\n3. Ideja: Pokazhi vezhba.\n4. Vrednost: Dodadi sovet.\n5. CTA: Probaj Footly.',
     '1. Hook: Daj im povod za komentari\n2. Prashanje: Koja noga ti e posilna?',
     '**1. Engagement:** Postavi fudbalsko prashanje.\n**2. CTA:** Probaj Footly.',
+    'Slajd 2: Engagement: Postavi prashanje.\nSlide 3: CTA: Probaj Footly.',
   ];
   for(const answer of answers) {
     const result=await ai.answerQuestion('Slideshow so 5 slajdovi',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext:'Footly',apiKey:'test',logger,fetch:async()=>response({answer,factIds:[]})});
@@ -222,8 +223,67 @@ test('numbered slideshow lists do not turn headings or next-line numbers into me
   }
 });
 
+test('the exact user-reported low-view scenario is answered on the first attempt',async()=>{
+  const question='Objasni mi sto da pravam ako napravam nekolku objavi i mnostvo od objavite imaat pod 500 pregledi. Pomogni mi.';
+  const answer='Ako povekjeto objavi imaat pod 500 pregledi, kako vo tvojot primer, ne menuvaj se odednash. Preporaka: proveri go hookot, izberi pojasna fudbalska tema i testiraj edna promena vo slednata objava. Sporeduvaj slichni objavi; ova ne e potvrden rezultat od kampanjata.';
+  let calls=0;
+  const result=await ai.answerQuestion(question,{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>{calls++;return response({answer,factIds:[]});}});
+  assert.equal(calls,1);
+  assert.match(result,/pod 500 pregledi/);
+  assert.match(result,/hookot/);
+  assert.doesNotMatch(result,/AI odgovorot momentalno|prvite objavi|pobednik/);
+});
+
+test('user-supplied metric pairs allow aliases and common number formats only as conditional or reported advice',async()=>{
+  for(const [question,answer] of [
+    ['Ako imam pod 500 pregledi?','Ako imash pod 500 views, testiraj pojasen hook.'],
+    ['Imam pod 1,000 views.','Spored tvojot opis so pod 1k pregledi, probaj pojasna tema.'],
+    ['Imam pod 1.5k views.','Spored tvojot opis so pod 1500 pregledi, probaj pojasna tema.'],
+    ['Imam pod 0.500k views.','Spored tvojot opis so pod 500 pregledi, probaj pojasna tema.'],
+    ['Ako imam 2 milioni pregledi?','Ako imash 2m views, testiraj nov hook.'],
+    ['Ako imam 1 000 followers?','Ako imash 1.000 sledbenici, izberi relevantna tema.'],
+    ['Engagement: 2,5%. Sovet?','Spored navedeniot primer so engagement 2.5%, proveri shto gi motivira komentarite.'],
+  ]) {
+    let calls=0;
+    const result=await ai.answerQuestion(question,{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>{calls++;return response({answer,factIds:[]});}});
+    assert.equal(calls,1);
+    assert.equal(result,answer);
+  }
+});
+
+test('user numbers cannot authorize new performance metrics, values, verified claims or fabricated references',async()=>{
+  for(const [question,payload] of [
+    ['Ako imam pod 500 pregledi?',{answer:'Ako imash 999 pregledi, smeni go hookot.',factIds:[]}],
+    ['Ako imam pod 500 pregledi?',{answer:'Ako imash 500 followers, smeni go hookot.',factIds:[]}],
+    ['Napravi 5 slajdovi.',{answer:'Ako imash 5 views, smeni go hookot.',factIds:[]}],
+    ['Ako imam pod 500 pregledi?',{answer:'Kampanjata ima 500 pregledi.',factIds:[]}],
+    ['Ako imam pod 500 pregledi?',{answer:'Spored tvojot opis, proveriv deka kampanjata sega ima 500 pregledi.',factIds:[]}],
+    ['Ako imam pod 500 pregledi?',{answer:'Ako imash pod 500 pregledi, smeni hook. Kampanjata ima 500 pregledi.',factIds:[]}],
+    ['Ako imam 1.5k views?',{answer:'Ako imash 15k pregledi, smeni hook.',factIds:[]}],
+    ['Ako imam 2 milioni pregledi?',{answer:'Ako imash 1 milion pregledi, smeni hook.',factIds:[]}],
+    ['Ako imam dva milioni pregledi?',{answer:'Ako imash eden milion pregledi, smeni hook.',factIds:[]}],
+    ['Ako imam 0.500k views?',{answer:'Ako imash 500000 pregledi, smeni hook.',factIds:[]}],
+    ['Ako imam 5% engagement?',{answer:'Ako imash 50% engagement, smeni hook.',factIds:[]}],
+    ['Ako imam 5% engagement?',{answer:'Ako imash engagement 5, smeni hook.',factIds:[]}],
+    ['Ako imam pod 500 pregledi?',{answer:'Ako imash pod 500 pregledi, smeni go hookot.',factIds:['invented']}],
+  ]) {
+    let calls=0;
+    const result=await ai.answerQuestion(question,{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>{calls++;return response(payload);}});
+    assert.equal(calls,2);
+    assert.match(result,/AI odgovorot momentalno ne e dostapen/);
+    assert.doesNotMatch(result,/prvite objavi|pobednik|999 pregledi|500 followers|5 views/);
+  }
+});
+
+test('creative and hypothetical questions receive a neutral provider fallback without campaign advice',async()=>{
+  for(const question of ['Kolku slajdovi treba da ima slideshow?','Koj e najdobar hook?','Ako imam pod 500 pregledi, shto da pravam?']) {
+    const result=await ai.answerQuestion(question,{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async()=>{throw new Error('offline');}});
+    assert.equal(result,'AI odgovorot momentalno ne e dostapen. Probaj povtorno za AI odgovor.');
+  }
+});
+
 test('numbered list markers do not hide real measured claims',async()=>{
-  for(const answer of ['1. Pregledi:999999999','1. 999999999 pregledi','2) Engagement = 99%']) {
+  for(const answer of ['1. Pregledi:999999999','1. 999999999 pregledi','2) Engagement = 99%','Slajd 2: Engagement = 99%']) {
     const result=await ai.answerQuestion('Pregledi?',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext:'Footly',apiKey:'test',logger,fetch:async()=>response({answer,factIds:[]})});
     assert.doesNotMatch(result,/999999999|99%/);
     assert.match(result,/AI odgovorot momentalno ne e dostapen/);

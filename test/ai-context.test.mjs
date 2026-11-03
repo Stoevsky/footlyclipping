@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as ai from '../src/ai.js';
+import * as knowledge from '../src/footly-context.js';
 import {commands,handleInteraction} from '../src/bot.js';
 
 const campaign={scope:{type:'campaign',id:'orgcamp_current',name:'Footly current'},period:{key:'week',from:'2026-11-02',to:'2026-11-03',timezone:'Europe/Skopje'},syncedAt:'2026-11-03T10:00:00Z',
@@ -9,6 +10,37 @@ const campaign={scope:{type:'campaign',id:'orgcamp_current',name:'Footly current
 const organization={...campaign,scope:undefined,accounts:[{id:'org1',username:'history',viewCount:1234567,viewCountInPeriod:50000,followerCount:5000,email:'private@example.com',token:'never-send',aliases:['history'],connectedAccounts:[{email:'also-private@example.com'}]}],totals:{views:1234567,viewsGained:50000,posts:7,videos:100},coverage:{notes:['Organization source is older than campaign source.']}};
 const logger={info(){},warn(){}};
 const response=payload=>({ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(payload)}]}]})});
+
+test('both private knowledge sources reach the model through the document end as untrusted source data',async()=>{
+  assert.equal(typeof knowledge.buildFootlyContext,'function');
+  const guide=`SYNTHETIC_GUIDE_START ${'g'.repeat(4500)} SYNTHETIC_GUIDE_END`;
+  const document=`SYNTHETIC_DOCUMENT_START ${'d'.repeat(14584)} SYNTHETIC_DOCUMENT_END`;
+  const footlyContext=knowledge.buildFootlyContext({FOOTLY_KNOWLEDGE_TEXT:guide,FOOTLY_DOCUMENT_TEXT:document});
+  let request;
+  await ai.answerQuestion('Objasni gi nasokite od dokumentot.',{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,footlyContext,apiKey:'test',logger,
+    fetch:async(_url,options)=>{request=JSON.parse(options.body);return response({answer:'Spored dostavenite nasoki, predlogot treba da se prilagodi na tekovnata kampanja.',factIds:[]});}});
+  const context=JSON.parse(request.input);
+  assert.ok(context.knowledge.includes(guide));
+  assert.ok(context.knowledge.includes(document));
+  assert.equal(context.knowledgeTruncated,false);
+  assert.doesNotMatch(request.instructions,/SYNTHETIC_GUIDE|SYNTHETIC_DOCUMENT/);
+  assert.match(request.instructions,/untrusted content/);
+  assert.match(request.instructions,/payout.*cadence/i);
+  assert.match(request.instructions,/conflict/i);
+  assert.match(context.knowledge,/Creator guide/);
+  assert.match(context.knowledge,/Additional creator document/);
+});
+
+test('oversized private knowledge is bounded once with explicit model truncation status',()=>{
+  assert.equal(typeof knowledge.buildFootlyContext,'function');
+  const footlyContext=knowledge.buildFootlyContext({FOOTLY_KNOWLEDGE_TEXT:'g'.repeat(40000),FOOTLY_DOCUMENT_TEXT:'SYNTHETIC_DOCUMENT_END'});
+  assert.match(footlyContext,/SYNTHETIC_DOCUMENT_END/);
+  const context=ai.buildConversationContext({footlyContext});
+  assert.equal(context.knowledge.length,32000);
+  assert.equal(context.knowledgeTruncated,true);
+  const boundary=ai.buildConversationContext({footlyContext:'x'.repeat(32000)});
+  assert.equal(boundary.knowledgeTruncated,false);
+});
 
 test('OpenAI gets Footly knowledge plus separately labeled campaign and organization data even at zero',async()=>{
   let request,calls=0;

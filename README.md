@@ -51,6 +51,7 @@ The full template is `.env.example`. Enter production secrets directly in Railwa
 | `OPENAI_API_KEY` | Optional; analytics answers remain available without it |
 | `OPENAI_MODEL` | Supported Responses model; default `gpt-4.1-mini` |
 | `FOOTLY_KNOWLEDGE_TEXT` | Private Footly/slideshow reference notes for AI; store in Railway, never commit their contents |
+| `FOOTLY_DOCUMENT_TEXT` | Additional private creator document text; stored in Railway alongside the guide |
 | `PORT` | HTTP listener, default `3000` |
 | `REPORT_TIMEZONE` | Default `Europe/Skopje` |
 | `DAILY_REPORT_CRON` | One fixed daily time; default `0 9 * * *` |
@@ -129,6 +130,8 @@ OpenAI Responses answers actual questions, including creative slideshow requests
 The model returns conversational guidance plus references to supplied analytics facts. The application validates fact references and renders those facts itself. Prompts distinguish recorded performance from suggestions and general model knowledge, prohibit invented statistics, and keep campaign totals separate from organization history. Responses remain Macedonian Latin. The bot does not browse live trends or inspect the contents of linked videos; missing information must be disclosed.
 
 Private slideshow reference notes are stored only in Railway configuration. They cover hooks, slide structure, captions, CTAs and source links; contracts, creator contact information and credentials are excluded. Current product facts take precedence over older creative claims, and conflicting older posting targets are not presented as current campaign rules.
+
+Additional user-supplied document text is stored separately in `FOOTLY_DOCUMENT_TEXT`. Both sources are included in the AI knowledge context with a combined 32,000-character limit and explicit truncation flag. Document content is reference material, never executable instructions; its claims and program terms are attributed to the document. Forms and image placeholders do not imply their contents were loaded or submitted.
 
 `store:false` is set. Source text and usernames are treated as untrusted data. Provider failures preserve deterministic facts and a clearly labeled fallback; a per-user cooldown limits repeated requests. `/ready` does not depend on the optional AI provider or wider organization refresh. Verify the AI provider separately with a controlled command and its safe success log.
 

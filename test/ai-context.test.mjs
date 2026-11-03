@@ -68,6 +68,34 @@ test('selected factual references render their source instead of mixing organiza
   assert.match(answer,/2026-11-03T10:00:00Z/);
 });
 
+test('performance advice omits an analytics appendix even when the model selects organization facts',async()=>{
+  const question='Objasni mi sto da pravam ako napravam nekolku objavi i mnostvo od objavite imaat pod 500 pregledi. Pomogni mi.';
+  const answer='Ako povekjeto objavi se pod 500 pregledi, kako vo tvojot primer, probaj pojasen hook i testiraj edna promena. Ova e predlog za eksperiment.';
+  let request;
+  const result=await ai.answerQuestion(question,{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async(_url,options)=>{
+    request=JSON.parse(options.body);return response({answer,factIds:['organization:views','organization:creators','organization:creator:0']});
+  }});
+  assert.equal(result,answer);
+  assert.equal(JSON.parse(request.input).analyticsRequested,false);
+  assert.doesNotMatch(result,/Korisni podatoci|Sinhronizirano|Opfat:|1,234,567/);
+  assert.match(request.instructions,/analyticsRequested.*false.*empty factIds/i);
+  assert.match(request.instructions,/platform.*guarantee/i);
+  assert.match(request.instructions,/authorized.*visuals/i);
+  assert.match(request.instructions,/watermark/i);
+});
+
+test('explicit measurements, comparisons and rankings retain useful facts alongside advice',async()=>{
+  for(const question of ['Kolku pregledi ima organizacijata? Daj i sovet.','Pomogni mi: sporedi ja kampanjata so organizacijata.','Daj rangiranje po pregledi i preporaka.']) {
+    let request;
+    const result=await ai.answerQuestion(question,{getAnalytics:async()=>campaign,getOrganizationAnalytics:async()=>organization,apiKey:'test',logger,fetch:async(_url,options)=>{
+      request=JSON.parse(options.body);return response({answer:'Faktite se za organizacijata. Preporaka: testiraj pojasen hook.',factIds:['organization:views']});
+    }});
+    assert.equal(JSON.parse(request.input).analyticsRequested,true);
+    assert.match(result,/Korisni podatoci/);
+    assert.match(result,/1,234,567/);
+  }
+});
+
 test('context creator caps are explicit and retain named creator outside first hundred',()=>{
   assert.equal(typeof ai.buildConversationContext,'function');
   const big={...organization,accounts:Array.from({length:140},(_,i)=>({id:String(i),username:`creator${i}`,viewCount:i,viewCountInPeriod:i}))};

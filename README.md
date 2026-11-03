@@ -62,7 +62,7 @@ All five primary channel variables are required even when destinations share an 
 
 Install the existing application with `bot` and `applications.commands` scopes in the authorized guild. Give it View Channel, Send Messages, Embed Links, and Read Message History in each destination. The bot only requests the Guilds gateway intent; privileged message-content/member intents are unnecessary. Startup validates guild ownership and channel permissions before readiness.
 
-Current deployment mapping: leaderboard → `leaderboard`; alerts/daily/weekly → `rezultati`; growth → `accounti`; AI → `promptiranje`.
+Current deployment mapping: leaderboard → `leaderboard`; alerts → `viral-videa`; daily/weekly → `dnevni-analytics`; growth → `postignuvanja`; AI → `footly-ai`.
 
 | Command | Behavior |
 | --- | --- |
@@ -80,9 +80,11 @@ Periods: today, yesterday, current week, previous week, current month, last 30 d
 
 Daily reports summarize yesterday at 09:00 Skopje. Weekly reports summarize the completed Monday–Sunday week at Monday 09:00. DST follows the IANA timezone. A minute retry loop catches a missed schedule after restart, but reports wait for a fetched closed-period dataset. Durable keys prevent normal duplicate sends; unfinished older deliveries are recovered independently.
 
+Launch verification covered configured schedules, automated scheduling tests, real catchup reports and restart deduplication. A scheduled 09:00 production execution has not yet been observed.
+
 ## Viral.app and data meaning
 
-Integration uses the [official API reference](https://viral.app/api/v1/docs) and [webhook guide](https://viral.app/docs/brands/api/webhooks). Inventory uses `/accounts` and `/videos`, checks every page against source totals, and never replaces good data after an incomplete fetch. Creator period metrics use filtered batches of up to 100 IDs, covering every tracked creator. Competitor accounts/videos are excluded.
+Integration uses the [official API reference](https://viral.app/api/v1/docs) and [webhook guide](https://viral.app/docs/brands/api/webhooks). Inventory uses `/accounts` and `/videos`, checks every page against source totals, and never replaces good data after an incomplete fetch. Creator period metrics use filtered batches of up to 100 IDs, requesting every tracked account; unavailable period metrics remain explicitly unknown. Competitor accounts/videos are excluded.
 
 Register this production endpoint:
 
@@ -124,7 +126,7 @@ Back up the Railway volume before manual maintenance. Never delete the database 
 
 ## Railway deployment
 
-Use repository `Stoevsky/footlyclipping`, branch `main`, Node 24, Railpack build (`npm ci`), start command `npm start`, one replica, sleeping/serverless disabled, and restart On Failure with five retries. The repository includes `railway.json`; mirror settings in Railway UI where config-as-code is unavailable.
+Use repository `Stoevsky/footlyclipping`, branch `main`, Node 24, Railpack build (lockfile-based npm installation), start command `npm start`, one replica, sleeping/serverless disabled, and restart On Failure with five retries. The repository includes `railway.json`; mirror settings in Railway UI where config-as-code is unavailable.
 
 Keep the existing Postgres service/volume. Set the database reference and other variables, public domain target port 3000, healthcheck `/ready` with 300-second timeout, then deploy the tested main commit.
 

@@ -10,7 +10,7 @@ Implementation and test work is tracked in `docs/superpowers/plans/2026-11-03-pr
 - [x] Add safe migrations, source coverage labels, Skopje calendar/DST handling and tests.
 - [x] Map existing channels and configure Railway database reference/domain/settings.
 - [x] Complete final full-suite verification and secret review: 80 passed, zero skipped; audit clean.
-- [ ] Push tested main commit and verify remote.
-- [ ] Deploy and verify real Railway, PostgreSQL, Discord, Viral and AI integrations.
-- [ ] Verify provider webhook signing secret and test delivery.
-- [ ] Record final deployment evidence and remaining limits.
+- [x] Push tested main commit and verify remote.
+- [x] Deploy and verify real Railway, PostgreSQL, Discord, Viral and AI integrations.
+- [x] Verify provider webhook signing secret and test delivery.
+- [x] Record deployment evidence and remaining data/delivery limits.

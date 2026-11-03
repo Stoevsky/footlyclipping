@@ -1,0 +1,22 @@
+{
+  "name": "footly-growth-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --env-file=.env --watch src/index.js",
+    "register": "node --env-file=.env scripts/register.mjs",
+    "test": "node --test test/*.test.mjs",
+    "simulate": "node --env-file=.env scripts/simulate.mjs"
+  },
+  "dependencies": {
+    "discord.js": "^14.22.1",
+    "git": "^0.1.5",
+    "node-cron": "^4.2.1",
+    "pg": "^8.16.3"
+  }
+}

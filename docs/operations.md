@@ -94,3 +94,13 @@ The user supplied `footly_mk (3).docx` for the bot's knowledge. Its complete ext
 Implementation `36666b3bc0b8a72548c9da2dda27ad46c8535ede` was deployed as `9da56488-b77b-47f6-b00c-38ffeb30cd54`; Railway confirmed the exact source SHA and Deployment successful. All 132 PostgreSQL-backed tests passed without skips. An actual-document boundary check confirmed the entire document fits alongside a guide larger than the configured guide, with `knowledgeTruncated:false`. The model receives both as untrusted source material with a 32,000-character knowledge limit and source-attribution guidance.
 
 `/ready` returned HTTP 200 with all checks true. A live `/prashaj` document-specific question produced an OpenAI answer using details from the added material, in Discord message `1567262871392616631`. Existing message-format preferences and campaign scope remain in force.
+
+## Low-view advice rejection — 2026-11-03
+
+The user reported two `/prasaj` failures at 20:50 and 20:51 Skopje. Both requests asked what to do if several posts receive under a stated view threshold. Deployment logs confirmed `AI_MEASURED_NUMBER_GUARD` on both the first response and corrective retry; OpenAI availability and credentials were not the cause. The validator incorrectly rejected a metric/value pair supplied by the user as if it were an invented measured result. A broad analytics-keyword match also added unrelated first-posts/winner advice to the fallback.
+
+The fix permits the same supplied metric/value pair when clearly framed as conditional or user-reported, while retaining checks against different values, swapped metrics, unrelated planning numbers and explicit false verification claims. Provider errors are neutral. Advice requests no longer append organization totals; explicit statistics, comparison and ranking requests retain relevant references. Prompt guidance also distinguishes document recommendations from platform guarantees or active campaign rules.
+
+The final implementation passed 138 PostgreSQL-backed tests without skips, including the exact reported question, metric aliases, common number formats, magnitudes, percent distinctions, list headings, error messages and advice-versus-analytics rendering.
+
+Source `901936da88e10f1a865c7d4f1f434c9570861766` was deployed as `c288a3a2-e7f3-46e0-899d-0775113b5b8a`, with the exact GitHub SHA and Deployment successful verified in Railway. `/ready` returned HTTP 200 with all checks true. At 21:03 Skopje, the exact question was replayed through `/prasaj`; Discord message `1567268100381089924` returned practical advice using the user's threshold, without the unavailable/winner fallback or an organization-statistics appendix. Both AI aliases continue to use the same handler.

@@ -95,6 +95,7 @@ test('real PostgreSQL migrations preserve old data, repeat, and sync atomically'
     const milestone={type:'video.views_milestone',timestamp:'2026-11-02T20:00:00Z',data:{video:{platform:'tiktok',platformVideoId:'1234567890123456789'},milestone:10000,observedAt:'2026-11-02T20:00:00Z'}};
     await db.enqueueEvent({...milestone,id:'late_provider'},database);
     await db.enqueueEvent({...milestone,id:'late_poll'},database);
+    await db.enqueueEvent({...milestone,id:'campaign_only',scope:{type:'campaign',id:'orgcamp_test'},data:{...milestone.data,milestone:50000}},database);
     const yesterday = await getAnalytics({period:'yesterday',now:input.syncedAt,timezone:'Europe/Skopje',database});
     assert.equal(yesterday.milestones.length,1);
     assert.equal(yesterday.milestones[0].data.milestone,10000);

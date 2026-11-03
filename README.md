@@ -2,7 +2,7 @@
 
 A Node.js 24 Discord bot for the existing Footly creator community. It stores real Viral.app analytics in PostgreSQL and publishes Macedonian Latin-script leaderboards, milestone alerts, daily/weekly reports, and data-grounded growth answers.
 
-Production uses the selected **Clipping Kampanja 5 Seriozni** campaign. Its roster remains visible even before the first campaign video or view. All bot analytics and output are scoped to that campaign through `VIRAL_CAMPAIGN_ID`.
+Production leaderboards, reports and alerts use the selected **Clipping Kampanja 5 Seriozni** campaign through `VIRAL_CAMPAIGN_ID`. Its roster remains visible even before the first campaign video or view. AI answers can also use separately labeled organization analytics for wider context.
 
 ## Architecture
 
@@ -50,6 +50,7 @@ The full template is `.env.example`. Enter production secrets directly in Railwa
 | `VIRAL_CAMPAIGN_ID` | Pin a campaign (`orgcamp_…`); all analytics use its official eligible campaign data with no organization fallback |
 | `OPENAI_API_KEY` | Optional; analytics answers remain available without it |
 | `OPENAI_MODEL` | Supported Responses model; default `gpt-4.1-mini` |
+| `FOOTLY_KNOWLEDGE_TEXT` | Private Footly/slideshow reference notes for AI; store in Railway, never commit their contents |
 | `PORT` | HTTP listener, default `3000` |
 | `REPORT_TIMEZONE` | Default `Europe/Skopje` |
 | `DAILY_REPORT_CRON` | One fixed daily time; default `0 9 * * *` |
@@ -74,7 +75,7 @@ Current deployment mapping: leaderboard → `leaderboard`; alerts → `viral-vid
 | `/kreator username platforma? period?` | Tracked creator statistics; platform disambiguates accounts |
 | `/statistika period?` | Aggregate counts and measured gains |
 | `/izvestaj tip?` | On-demand daily/weekly report preview |
-| `/prasaj prashanje` | Facts and recommendations in the configured AI channel |
+| `/prasaj prashanje`, `/prashaj prashanje` | OpenAI answers using campaign facts, organization context, Footly knowledge and slideshow guidance; configured AI channel only |
 | `/osvezi` | Synchronize and update the persistent leaderboard; Manage Server required |
 | `/status` | Private queue/synchronization status |
 | `/test` | Private bot check; Manage Server required |
@@ -121,11 +122,15 @@ Data limitations are shown in Discord:
 - Source `loadAt` freshness is separate from successful fetch time. Stale/unknown source timestamps are disclosed.
 - Instagram numeric IDs are not public shortcodes. Missing source URLs remain absent rather than producing invented links.
 
-## AI grounding
+## AI grounding and creator knowledge
 
-The bot calculates facts locally from persisted analytics. OpenAI Responses receives a small computed context and selects one or two approved recommendation IDs using a strict JSON schema. The application renders all facts and recommendation text, so model output cannot introduce invented statistics or causes. `store:false` is set; no credentials or creator contact details enter the context. Provider failures preserve measured facts and a deterministic recommendation. A per-user cooldown limits repeated requests. With zero campaign activity, answers list the tied participants and first-post guidance without declaring a winner or calling the AI provider unnecessarily.
+OpenAI Responses answers actual questions, including creative slideshow requests even when campaign metrics are zero. It receives the question, separately labeled campaign/organization facts, source timestamps and coverage, public Footly product context, and optional private creator guidance from `FOOTLY_KNOWLEDGE_TEXT`. A separate organization synchronization supplies broader AI context with milestone generation disabled; it cannot change campaign leaderboard/report scope.
 
-Success logs `[ai] Recommendation selection validated`; fallback logs only a safe HTTP status or generic code. `/ready` deliberately does not depend on this optional provider. AI behavior should be separately checked with a controlled `/prasaj` request.
+The model returns conversational guidance plus references to supplied analytics facts. The application validates fact references and renders those facts itself. Prompts distinguish recorded performance from suggestions and general model knowledge, prohibit invented statistics, and keep campaign totals separate from organization history. Responses remain Macedonian Latin. The bot does not browse live trends or inspect the contents of linked videos; missing information must be disclosed.
+
+Private slideshow reference notes are stored only in Railway configuration. They cover hooks, slide structure, captions, CTAs and source links; contracts, creator contact information and credentials are excluded. Current product facts take precedence over older creative claims, and conflicting older posting targets are not presented as current campaign rules.
+
+`store:false` is set. Source text and usernames are treated as untrusted data. Provider failures preserve deterministic facts and a clearly labeled fallback; a per-user cooldown limits repeated requests. `/ready` does not depend on the optional AI provider or wider organization refresh. Verify the AI provider separately with a controlled command and its safe success log.
 
 ## PostgreSQL
 

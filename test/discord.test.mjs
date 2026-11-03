@@ -65,7 +65,7 @@ test('AI cannot add fabricated numeric claims or exceed Discord content limits',
   assert.ok(answer.length<=1950);
 });
 
-test('AI uses only approved recommendation IDs and rejects written invented statistics',async()=>{
+test('AI rejects malformed provider output and keeps measured fallback facts',async()=>{
   let request;
   const answer=await ai.answerQuestion('Koj e najdobar?',{getAnalytics:async()=>snapshot,apiKey:'test',fetch:async(_url,options)=>{
     request=options;
@@ -140,9 +140,9 @@ test('command metric and period combinations select matching data and labels',as
   assert.match(lifetime.description,/100,000/);
 });
 
-test('successful AI recommendation selection is Latin and cannot introduce model prose',async()=>{
+test('successful OpenAI prose is Latin and logged without source content',async()=>{
   const logs=[];
-  const answer=await ai.answerQuestion('Koj e najdobar?',{logger:{info:(...args)=>logs.push(args),warn:(...args)=>logs.push(args)},getAnalytics:async()=>snapshot,apiKey:'test',fetch:async()=>({ok:true,json:async()=>({output:[{content:[{type:'output_text',text:'{"recommendationIds":["review_top_posts"]}'}]}]})})});
+  const answer=await ai.answerQuestion('Koj e najdobar?',{logger:{info:(...args)=>logs.push(args),warn:(...args)=>logs.push(args)},getAnalytics:async()=>snapshot,apiKey:'test',fetch:async()=>({ok:true,json:async()=>({output:[{content:[{type:'output_text',text:'{"answer":"Preporaka: Pregledajte gi najdobrite objavi i testirajte novi hookovi.","factIds":[]}'}]}]})})});
   assert.match(answer,/Pregledajte gi najdobrite objavi/);
   assert.doesNotMatch(answer,/[\u0400-\u04ff]/u);
   assert.match(JSON.stringify(logs),/validated/);
@@ -183,7 +183,7 @@ test('zero campaign AI facts show scope and avoid fabricated winner or format ad
   assert.match(answer,/izramneti/i);
   assert.match(answer,/prvite objavi/);
   assert.doesNotMatch(answer,/Pregledajte gi najdobrite objavi/);
-  assert.equal(calls,0);
+  assert.equal(calls,1);
 });
 
 test('campaign report keys cannot collide with old organization report keys',async()=>{

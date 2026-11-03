@@ -3,7 +3,7 @@ import { config, configIssues } from './config.js';
 import { setupDatabase, pool, getCampaignSnapshot } from './db.js';
 import { bot, registerCommands, updateLeaderboard, postDailyReport, postWeeklyReport, postCampaignSummary } from './bot.js';
 import { startHttpServer, processQueue } from './webhooks.js';
-import { syncAnalytics } from './sync.js';
+import { syncAnalytics, createSynchronizer } from './sync.js';
 import { retryUntilReady, createJob, safeError, shouldRetryInitialSync } from './runtime.js';
 import { recoverPendingDeliveries } from './delivery.js';
 
@@ -47,10 +47,19 @@ const syncJob = createJob('sync', async()=>{
   catch(error) {initialSyncRetryable=shouldRetryInitialSync(error);throw error;}
   initialSyncComplete = true;
   console.info(`[sync] Stored ${result.accounts} creators, ${result.videos} videos, ${result.events} new milestone events`);
+  if(config.campaignId) void organizationAIJob();
   if(discordConfigured && bot.isReady()) {
     await updateLeaderboard(false);
     await campaignSummaryJob();
   }
+});
+// Wider analytics are context for AI only. This independent refresh cannot create
+// organization alerts, change the campaign scope, or block campaign readiness.
+const refreshOrganizationForAI = createSynchronizer({campaignId:null,milestones:[]});
+const organizationAIJob = createJob('ai-org-sync',async()=>{
+  if(!config.campaignId || !databaseInitialized || !config.apiKey || shuttingDown) return;
+  const result=await refreshOrganizationForAI();
+  console.info(`[ai-org-sync] Refreshed ${result.accounts} organization accounts and ${result.videos} videos for AI context`);
 });
 const campaignSummaryJob = createJob('campaign-summary',async()=>{
   if(databaseInitialized && discordConfigured && bot.isReady() && !shuttingDown) await postCampaignSummary();

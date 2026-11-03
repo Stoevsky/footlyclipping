@@ -15,5 +15,5 @@
 - [x] Discord owner: update `src/bot.js`, `src/presentation.js`, `src/ai.js`, `src/delivery.js` and tests for campaign names, zero ties, scoped report/recovery keys and one initial campaign summary.
 - [x] Runtime owner: wire initial campaign summary, require successful scoped synchronization for readiness and document configuration/coverage.
 - [x] Run `TEST_DATABASE_URL=postgresql://stoevski@127.0.0.1:55439/footly_test npm test`, audit, diff and secret checks. Review integration contracts and fix failures before pushing.
-- [ ] Stage the verified campaign variable, commit/push to `main`, deploy the existing Railway service and verify source commit and readiness.
-- [ ] Verify the existing leaderboard now shows only the four campaign creators at zero and the scoped summary is delivered once. Record evidence and remaining limits.
+- [x] Stage the verified campaign variable, commit/push to `main`, deploy the existing Railway service and verify source commit and readiness.
+- [x] Verify the existing leaderboard now shows only the four campaign creators at zero and the scoped summary is delivered once. Record evidence and remaining limits.

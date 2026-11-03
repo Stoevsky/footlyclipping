@@ -178,3 +178,36 @@ test('empty campaign performance may prove four zero rows only with explicit emp
   assert.ok(saved.periods.every(period => period.creators.length === 4 && period.creators.every(creator => creator.viewCount === 0) && period.coverage.performanceComplete));
   assert.ok(saved.creators.flatMap(creator => creator.accounts).every(account => account.followerCount === null));
 });
+
+test('AI organization refresh explicitly bypasses campaign scope and emits no organization alerts', async t => {
+  const { config } = await import('../src/config.js');
+  const configuredCampaign = config.campaignId;
+  config.campaignId = campaignId;
+  t.after(() => { config.campaignId = configuredCampaign; });
+  const sourceVideo = { ...video, viewCount: 9000000 };
+  const previousVideo = { ...sync.normalizeVideo(sourceVideo), viewCount: 9000 };
+  const periodRequests = [];
+  let saved;
+  const run = sync.createSynchronizer({
+    campaignId: null, milestones: [],
+    api: {
+      accounts: async () => [{ ...account, totalViews: 9000000 }], videos: async () => [sourceVideo],
+      periodAccounts: async (ids, range) => { periodRequests.push({ ids, range }); return [{ id: account.id, viewCountInPeriod: 60000 }]; },
+      periodVideos: async () => [{ ...sourceVideo, viewCountInPeriod: 60000 }],
+      campaign: async () => assert.fail('organization AI refresh must not request campaign metrics'),
+    },
+    inventory: async () => ({ accounts: [sync.normalizeAccount(account)], videos: [previousVideo] }),
+    persist: async value => { saved = value; },
+    campaignInventory: async () => assert.fail('organization AI refresh must not read campaign storage'),
+    persistCampaign: async () => assert.fail('organization AI refresh must not write campaign storage'),
+    failure: async () => {},
+  });
+  const result = await run(new Date('2026-11-03T09:00:00Z'));
+  assert.equal(saved.accounts[0].viewCount, 9000000);
+  assert.equal(saved.videos[0].viewCount, 9000000);
+  assert.ok(periodRequests.length > 0 && periodRequests.every(request => request.ids.includes(account.id)));
+  assert.ok(saved.periods.every(period => period.accounts[0].viewCountInPeriod === 60000 && period.videoCoverage === 'top100'));
+  assert.deepEqual(saved.events, []);
+  assert.equal(result.events, 0);
+  assert.equal(result.campaignId, undefined);
+});

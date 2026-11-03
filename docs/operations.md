@@ -61,3 +61,12 @@ All 80 tests passed with a disposable local PostgreSQL instance, including migra
 The next genuine video milestone has not occurred during launch verification. Milestone thresholds, source event validation, webhook/poll deduplication and delivery recovery are covered by automated tests; live signed transport and live Discord delivery were separately verified. Absolute exactly-once behavior cannot be guaranteed if an external Discord message is deleted during an ambiguous send/receipt failure.
 
 The Railway UI reported Auto deploy unavailable while the connected public repository and main-branch manual deployments worked. Future pushes should be followed by an explicit source/deployment check; do not assume a push alone rolls out code.
+
+
+## Campaign scope correction — 2026-11-03
+
+The user selected the recent four-creator campaign, **Clipping Kampanja 5 Seriozni** (`orgcamp_UrJnb4ms3ZR8`). The campaign setting is pinned in Railway. Implementation `2f449231807b439b481ff1963fa00be91be1a761` passed 108 tests with PostgreSQL, zero skips, and was deployed as `a85f8e10-1835-4220-8147-bacad1ffe2b3`. At 16:55:40 Skopje, production synchronization reported four creators, zero eligible campaign videos and no milestones. `/ready` returned HTTP 200 with all checks true.
+
+The existing leaderboard message was edited in place: exactly four campaign creators, each at zero views, explicitly tied. One campaign summary appeared in the analytics channel with zero campaign views/posts and all four participants. Prior organization data remains stored separately. Pre-participation daily/weekly reports are suppressed; future reports use campaign data. Campaign video lists are limited by the provider's top-300 endpoint, with eligibility failures excluded from alerts.
+
+The user's subsequent AI request authorizes broader organization context for `/prasaj` and `/prashaj` only. It does not change campaign-only leaderboard, report or alert scope. Private creator-guide notes are kept in runtime configuration, not committed to Git.

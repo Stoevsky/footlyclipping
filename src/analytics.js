@@ -149,7 +149,8 @@ export async function getAnalytics({period = 'week',now = new Date(),timezone = 
       (SELECT DISTINCT ON (video_id) video_id,observed_at,payload FROM video_metrics WHERE observed_at >= $1 AND observed_at < $2 AND observed_at <= $3 ORDER BY video_id,observed_at)
       UNION (SELECT DISTINCT ON (video_id) video_id,observed_at,payload FROM video_metrics WHERE observed_at >= $1 AND observed_at < $2 AND observed_at <= $3 ORDER BY video_id,observed_at DESC)`,[range.start,range.end,now]);
     const milestones = await client.query(`SELECT DISTINCT ON (payload #>> '{data,video,platform}',payload #>> '{data,video,platformVideoId}',payload #>> '{data,milestone}') payload,received_at
-      FROM viral_events WHERE event_type='video.views_milestone' AND COALESCE(observed_at,received_at) >= $1 AND COALESCE(observed_at,received_at) < $2
+      FROM viral_events WHERE event_type='video.views_milestone' AND payload #>> '{scope,type}' IS DISTINCT FROM 'campaign'
+      AND COALESCE(observed_at,received_at) >= $1 AND COALESCE(observed_at,received_at) < $2
       ORDER BY payload #>> '{data,video,platform}',payload #>> '{data,video,platformVideoId}',payload #>> '{data,milestone}',received_at DESC`,[range.start,range.end]);
     await client.query('COMMIT');
     return calculateAnalytics({...inventory,inventoryCoverage:inventory.coverage,period:range,now,timezone,

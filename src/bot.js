@@ -30,6 +30,8 @@ export const commands=[
     .addStringOption(option=>option.setName('tip').setDescription('Tip na izvestaj').addChoices({name:'Dneven',value:'daily'},{name:'Nedelen',value:'weekly'})),
   new SlashCommandBuilder().setName('prasaj').setDescription('Prashaj go Footly Growth AI za kreatorite')
     .addStringOption(option=>option.setName('prashanje').setDescription('Shto sakash da znaesh?').setRequired(true).setMaxLength(500)),
+  new SlashCommandBuilder().setName('prashaj').setDescription('Razgovaraj so Footly AI za idei, slideshow i analitika')
+    .addStringOption(option=>option.setName('prashanje').setDescription('Shto sakash da znaesh?').setRequired(true).setMaxLength(500)),
   new SlashCommandBuilder().setName('status').setDescription('Proveri go statusot na botot'),
   new SlashCommandBuilder().setName('osvezi').setDescription('Sinhroniziraj i osvezhi go leaderboardot').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('test').setDescription('Privatna proverka na botot').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
@@ -129,7 +131,7 @@ export async function handleInteraction(interaction,dependencies={}) {
     if(name==='test') {
       await interaction.reply({...replyPayload(new EmbedBuilder().setColor(0x34db83).setTitle('✅ Footly botot raboti!').setDescription('Ova e privatna proverka.')),ephemeral:true});return;
     }
-    if(name==='prasaj') {
+    if(name==='prasaj' || name==='prashaj') {
       if(config.channels.ai && interaction.channelId!==config.channels.ai) {
         await interaction.reply({content:`Koristi ja ovaa komanda vo <#${config.channels.ai}>.`,ephemeral:true,allowedMentions:{parse:[]}});return;
       }
@@ -141,7 +143,7 @@ export async function handleInteraction(interaction,dependencies={}) {
       lastAIRequest.set(interaction.user.id,now);
       await interaction.deferReply();
       const answer=await (dependencies.answerQuestion || answerQuestion)(interaction.options.getString('prashanje',true));
-      await interaction.editReply({content:`🤖 **Footly Growth AI**\n${latinText(answer).slice(0,1950)}`,allowedMentions:{parse:[]}});return;
+      await interaction.editReply({...replyPayload(new EmbedBuilder().setColor(0x34db83).setTitle('🤖 Footly Growth AI').setDescription(latinText(answer).slice(0,3800))),allowedMentions:{parse:[]}});return;
     }
     if(name==='osvezi') {
       await interaction.deferReply({ephemeral:true});

@@ -86,3 +86,11 @@ At 17:17:45 the production log recorded `[ai] OpenAI conversational response val
 The independent AI context refresh loaded 27 organization accounts and 291 videos. The campaign leaderboard remained limited to four creators (five connected accounts), including both current handles for Lazar. Its existing message was updated in place to list the roster and await first posts, without repeated zeros or provider branding. New inactive-campaign reports use the same concise roster format; earlier historical reports were retained.
 
 The final implementation passed 130 PostgreSQL-backed tests with zero skips, dependency audit with zero vulnerabilities, diff checks and a credential-pattern scan of 49 project files. Private creator-guide notes remain runtime configuration, not repository contents. The AI has summarized guide knowledge and selected analytics context; it does not claim to have viewed linked media that has not been loaded.
+
+## Additional creator document — 2026-11-03, 20:43 Skopje
+
+The user supplied `footly_mk (3).docx` for the bot's knowledge. Its complete extracted text (294 nonempty paragraphs) and nine external link references were stored in private Railway variable `FOOTLY_DOCUMENT_TEXT`, alongside the existing guide. No document content was committed to the repository. Embedded form/image placeholders have no loaded contents; the document contains no embedded image files. The temporary extraction was removed and the original DOCX preserved.
+
+Implementation `36666b3bc0b8a72548c9da2dda27ad46c8535ede` was deployed as `9da56488-b77b-47f6-b00c-38ffeb30cd54`; Railway confirmed the exact source SHA and Deployment successful. All 132 PostgreSQL-backed tests passed without skips. An actual-document boundary check confirmed the entire document fits alongside a guide larger than the configured guide, with `knowledgeTruncated:false`. The model receives both as untrusted source material with a 32,000-character knowledge limit and source-attribution guidance.
+
+`/ready` returned HTTP 200 with all checks true. A live `/prashaj` document-specific question produced an OpenAI answer using details from the added material, in Discord message `1567262871392616631`. Existing message-format preferences and campaign scope remain in force.
